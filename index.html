@@ -651,24 +651,9 @@ setInterval(()=>{
 },15000);
 
 // ── PWA Service Worker + Install prompt ─────────────────────────
-const SW_CACHE = 'iss-monitor-v1';
-const SW_CODE = `
-self.addEventListener('install', e => {
-  e.waitUntil(caches.open('${SW_CACHE}').then(cache =>
-    cache.addAll([location.pathname])
-  ));
-});
-self.addEventListener('fetch', e => {
-  if(e.request.url.includes('supabase.co')) return; // always live from Supabase
-  e.respondWith(
-    caches.match(e.request).then(r => r || fetch(e.request))
-  );
-});`;
-
-if('serviceWorker' in navigator){ navigator.serviceWorker.register('sw.js').catch(()=>{}); }', SW_CACHE)],
-    {type:'application/javascript'});
-  navigator.serviceWorker.register(URL.createObjectURL(blob))
-    .catch(()=>{});
+// ── PWA service worker ─────────────────────────────────────────
+if('serviceWorker' in navigator){
+  navigator.serviceWorker.register('/sw.js').catch(()=>{});
 }
 
 // Install banner
