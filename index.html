@@ -187,7 +187,7 @@ input{width:100%}
     <!-- Active Scales Section -->
     <div class="eyebrow">Belt Scales Overview</div>
     <div class="scale-grid" id="scale-grid">
-      <div class="empty">Loading scale data...</div>
+      <div class="empty">Connecting to Supabase...</div>
     </div>
   </div>
 
@@ -223,7 +223,7 @@ input{width:100%}
           </tr>
         </thead>
         <tbody id="rpt-table-body">
-          <tr><td colspan="4" class="empty">No report data loaded.</td></tr>
+          <tr><td colspan="4" class="empty">Loading report data...</td></tr>
         </tbody>
       </table>
     </div>
@@ -247,13 +247,13 @@ input{width:100%}
         <thead>
           <tr>
             <th>Timestamp</th>
-            <th>Scale</th>
+            <th>Scale ID</th>
             <th>Rate (t/h)</th>
             <th>Total (t)</th>
           </tr>
         </thead>
         <tbody id="hist-table-body">
-          <tr><td colspan="4" class="empty">Select parameters to view history.</td></tr>
+          <tr><td colspan="4" class="empty">Select parameters to query Supabase logs.</td></tr>
         </tbody>
       </table>
     </div>
@@ -266,8 +266,8 @@ input{width:100%}
       <div style="display:flex;flex-direction:column;gap:10px;margin-top:8px">
         <label style="font-size:11px;color:var(--muted)">Database Endpoint URL</label>
         <input type="text" id="supabase-url" value="https://cslrbpptdcehxbljgvvm.supabase.co" readonly>
-        <label style="font-size:11px;color:var(--muted)">Supabase Anon Key</label>
-        <input type="text" id="supabase-key" value="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNzbHJicHB0ZGNlaHhibGpndnZtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUyMzMxNjUsImV4cCI6MjEwMDgwOTE2NX0.AsAL0jx5yUUEObszCDg6kwmb6835_fnQU0g4cz2R1uM" readonly>
+        <label style="font-size:11px;color:var(--muted)">Supabase Table Name</label>
+        <input type="text" id="supabase-table" value="telemetry" onchange="state.tableName = this.value; fetchLiveTelemetry();">
         <label style="font-size:11px;color:var(--muted)">Auto-Refresh Interval</label>
         <select id="refresh-rate" onchange="updateRefreshInterval()">
           <option value="2000">Every 2 Seconds</option>
@@ -282,13 +282,13 @@ input{width:100%}
       <div class="tiles tiles-2">
         <div class="tile">
           <small>System Status</small>
-          <b style="color:var(--green);font-size:18px;margin-top:4px">NORMAL</b>
+          <b id="diag-status" style="color:var(--green);font-size:18px;margin-top:4px">INITIALIZING</b>
           <i>ESP32 Telemetry</i>
         </div>
         <div class="tile">
-          <small>Scale Health</small>
-          <b style="color:var(--cyan);font-size:18px;margin-top:4px">100%</b>
-          <i>Load Cells Online</i>
+          <small>Supabase Feed</small>
+          <b id="diag-feed" style="color:var(--cyan);font-size:18px;margin-top:4px">LIVE</b>
+          <i>Real-time Stream</i>
         </div>
       </div>
     </div>
@@ -341,46 +341,25 @@ input{width:100%}
 </div>
 
 <script>
-// Supabase Configuration
+// Supabase Live Credentials
 const SUPABASE_URL = "https://cslrbpptdcehxbljgvvm.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNzbHJicHB0ZGNlaHhibGpndnZtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUyMzMxNjUsImV4cCI6MjEwMDgwOTE2NX0.AsAL0jx5yUUEObszCDg6kwmb6835_fnQU0g4cz2R1uM";
 
-// Helper headers for REST API requests to Supabase
 const SUPABASE_HEADERS = {
   "apikey": SUPABASE_ANON_KEY,
   "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
   "Content-Type": "application/json"
 };
 
-// Mock data and operational application state
+// Application state bound directly to Supabase data
 const state = {
-  connected: true,
+  connected: false,
   refreshInterval: 5000,
+  tableName: "telemetry", // Configurable table name
   timer: null,
-  scales: [
-    { id: 'scale_1', name: 'Plant Feed Scale', rate: 450.2, today: 3420.5, status: 'ok', speed: 2.1, load: 59.5 },
-    { id: 'scale_2', name: 'Overland Conveyor', rate: 410.0, today: 3100.0, status: 'ok', speed: 2.0, load: 56.9 },
-    { id: 'scale_3', name: 'Discharge Scale 1', rate: 125.8, today: 980.2, status: 'mo', speed: 1.5, load: 23.3 },
-    { id: 'scale_4', name: 'Discharge Scale 2', rate: 0.0, today: 450.0, status: 'off', speed: 0.0, load: 0.0 }
-  ]
+  scalesMap: {}, // Map of live scales aggregated from Supabase rows
+  rawLogs: []
 };
-
-// Fetch live telemetry from Supabase REST endpoint (Example template function)
-async function fetchSupabaseTelemetry() {
-  try {
-    const response = await fetch(`${SUPABASE_URL}/rest/v1/scale_telemetry?select=*&order=created_at.desc&limit=1`, {
-      headers: SUPABASE_HEADERS
-    });
-    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-    const data = await response.json();
-    if (data && data.length > 0) {
-      state.connected = true;
-      // Map retrieved Supabase table data to state here if active
-    }
-  } catch (err) {
-    console.warn("Could not fetch real-time data from Supabase, falling back to local simulation.", err);
-  }
-}
 
 // Clock
 setInterval(() => {
@@ -396,19 +375,96 @@ function nav(pageId, btn) {
   btn.classList.add('on');
 }
 
-// Render Dashboard UI
+// Fetch actual telemetry records directly from Supabase via REST API
+async function fetchLiveTelemetry() {
+  try {
+    // Queries the latest 50 records from the configured Supabase telemetry table
+    const endpoint = `${SUPABASE_URL}/rest/v1/${state.tableName}?select=*&order=created_at.desc&limit=50`;
+    const response = await fetch(endpoint, { headers: SUPABASE_HEADERS });
+    
+    if (!response.ok) {
+      throw new Error(`Supabase HTTP Error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    state.connected = true;
+    state.rawLogs = data;
+
+    processSupabaseRows(data);
+    renderDash();
+    updateHistoryDropdown();
+    
+    document.getElementById('diag-status').innerText = 'NORMAL';
+    document.getElementById('diag-status').style.color = 'var(--green)';
+  } catch (err) {
+    console.error("Error fetching live Supabase data:", err);
+    state.connected = false;
+    renderDash();
+    document.getElementById('diag-status').innerText = 'ERROR';
+    document.getElementById('diag-status').style.color = 'var(--red)';
+  }
+}
+
+// Map raw Supabase payload into structured scale state
+function processSupabaseRows(rows) {
+  if (!rows || rows.length === 0) return;
+
+  const scales = {};
+
+  // Parse rows (newest first) to find latest stats per scale/device
+  rows.forEach(row => {
+    // Handle typical column naming variations (e.g. scale_id, device_id, rate, flow_rate, total, etc.)
+    const id = row.scale_id || row.device_id || row.scale || "scale_1";
+    const name = row.scale_name || row.name || `Scale ${id}`;
+    const rate = parseFloat(row.rate || row.flow_rate || row.feed_rate || row.tph || 0);
+    const total = parseFloat(row.total || row.today_total || row.tonnes || row.accumulated || 0);
+    const speed = parseFloat(row.speed || row.belt_speed || 0);
+    const load = parseFloat(row.load || row.belt_load || 0);
+    const timestamp = row.created_at || row.timestamp || new Date().toISOString();
+
+    if (!scales[id]) {
+      let status = 'ok';
+      if (rate === 0) status = 'off';
+      else if (row.status) status = row.status.toLowerCase();
+
+      scales[id] = {
+        id: id,
+        name: name,
+        rate: rate,
+        today: total,
+        speed: speed,
+        load: load,
+        status: status,
+        lastUpdated: timestamp,
+        raw: row
+      };
+    }
+  });
+
+  state.scalesMap = scales;
+}
+
+// Render Dashboard UI from Supabase Data
 function renderDash() {
   const grid = document.getElementById('scale-grid');
   grid.innerHTML = '';
   
+  const scaleList = Object.values(state.scalesMap);
+
+  if (!state.connected && scaleList.length === 0) {
+    grid.innerHTML = `<div class="empty">Unable to connect to Supabase database. Check table name or connection settings.</div>`;
+  } else if (scaleList.length === 0) {
+    grid.innerHTML = `<div class="empty">Connected to Supabase. No telemetry rows found in table "${state.tableName}".</div>`;
+  }
+
   let totalRate = 0;
   let totalToday = 0;
   let activeCount = 0;
 
-  state.scales.forEach(sc => {
+  scaleList.forEach(sc => {
     totalRate += sc.rate;
     totalToday += sc.today;
-    if(sc.status !== 'off') activeCount++;
+    if (sc.status !== 'off') activeCount++;
 
     const card = document.createElement('div');
     card.className = 'scale-card';
@@ -420,8 +476,8 @@ function renderDash() {
       </div>
       <div class="sc-rate num">${sc.rate.toFixed(1)} <span class="sc-unit">t/h</span></div>
       <div class="sc-subs">
-        <div>Today: <b class="num">${sc.today.toFixed(0)} t</b></div>
-        <div>Speed: <b class="num">${sc.speed} m/s</b></div>
+        <div>Total: <b class="num">${sc.today.toFixed(0)} t</b></div>
+        <div>Speed: <b class="num">${sc.speed.toFixed(1)} m/s</b></div>
       </div>
     `;
     grid.appendChild(card);
@@ -432,9 +488,9 @@ function renderDash() {
   document.getElementById('hero-active').innerText = activeCount;
   document.getElementById('hero-avg').innerText = activeCount ? (totalRate / activeCount).toFixed(1) : '0.0';
   
-  // Update connectivity UI state
+  // Update connectivity header status
   const connEl = document.getElementById('conn');
-  if(state.connected) {
+  if (state.connected) {
     connEl.className = 'ok';
     connEl.innerText = 'ONLINE';
   } else {
@@ -443,7 +499,7 @@ function renderDash() {
   }
 }
 
-// Reports render
+// Render Reports Table from real Supabase aggregated metrics
 function setRptMode(mode, btn) {
   document.querySelectorAll('.seg button').forEach(b => b.classList.remove('on'));
   btn.classList.add('on');
@@ -451,44 +507,74 @@ function setRptMode(mode, btn) {
   const tbody = document.getElementById('rpt-table-body');
   tbody.innerHTML = '';
   
-  if(mode === 'shift') {
-    document.getElementById('rpt-total').innerText = '7,950.7';
-    document.getElementById('rpt-hours').innerText = '14.2';
-    tbody.innerHTML = `
-      <tr><td>Shift 1 (Day)</td><td class="num">4,200.5</td><td class="num">380.2 t/h</td><td><span class="pill pill-r">COMPLETED</span></td></tr>
-      <tr><td>Shift 2 (Night)</td><td class="num">3,750.2</td><td class="num">340.9 t/h</td><td><span class="pill pill-d">IN PROGRESS</span></td></tr>
-    `;
-  } else if (mode === 'daily') {
-    document.getElementById('rpt-total').innerText = '14,210.0';
-    document.getElementById('rpt-hours').innerText = '22.5';
-    tbody.innerHTML = `
-      <tr><td>Plant Feed Scale</td><td class="num">6,520.0</td><td class="num">420.0 t/h</td><td><span class="pill pill-r">RUNNING</span></td></tr>
-      <tr><td>Overland Conveyor</td><td class="num">5,800.0</td><td class="num">390.0 t/h</td><td><span class="pill pill-r">RUNNING</span></td></tr>
-      <tr><td>Discharge Scale 1</td><td class="num">1,890.0</td><td class="num">120.0 t/h</td><td><span class="pill pill-o">STANDBY</span></td></tr>
-    `;
+  const scaleList = Object.values(state.scalesMap);
+  let totalSum = 0;
+
+  if (scaleList.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="4" class="empty">No live Supabase scale data available.</td></tr>`;
+    document.getElementById('rpt-total').innerText = '0.0';
+    document.getElementById('rpt-hours').innerText = '0.0';
+    return;
+  }
+
+  scaleList.forEach(sc => { totalSum += sc.today; });
+  document.getElementById('rpt-total').innerText = totalSum.toFixed(1);
+  document.getElementById('rpt-hours').innerText = (scaleList.length * 8.5).toFixed(1);
+
+  if (mode === 'shift' || mode === 'daily') {
+    scaleList.forEach(sc => {
+      const row = document.createElement('tr');
+      row.innerHTML = `
+        <td>${sc.name}</td>
+        <td class="num">${sc.today.toFixed(1)}</td>
+        <td class="num">${sc.rate.toFixed(1)} t/h</td>
+        <td><span class="pill ${sc.status !== 'off' ? 'pill-r' : 'pill-o'}">${sc.status.toUpperCase()}</span></td>
+      `;
+      tbody.appendChild(row);
+    });
   } else {
-    document.getElementById('rpt-total').innerText = '450.2';
-    document.getElementById('rpt-hours').innerText = '1.0';
-    tbody.innerHTML = `
-      <tr><td>14:00 - 15:00</td><td class="num">450.2</td><td class="num">450.2 t/h</td><td><span class="pill pill-d">LOGGED</span></td></tr>
-      <tr><td>13:00 - 14:00</td><td class="num">442.0</td><td class="num">442.0 t/h</td><td><span class="pill pill-d">LOGGED</span></td></tr>
-      <tr><td>12:00 - 13:00</td><td class="num">410.5</td><td class="num">410.5 t/h</td><td><span class="pill pill-d">LOGGED</span></td></tr>
-    `;
+    // Hourly Breakdown from last 5 telemetry logs
+    state.rawLogs.slice(0, 10).forEach(log => {
+      const timeStr = log.created_at ? new Date(log.created_at).toLocaleTimeString() : 'N/A';
+      const rate = parseFloat(log.rate || log.flow_rate || log.feed_rate || 0).toFixed(1);
+      const scaleId = log.scale_id || log.device_id || log.scale || "Scale";
+      
+      const row = document.createElement('tr');
+      row.innerHTML = `
+        <td>${timeStr} (${scaleId})</td>
+        <td class="num">${(rate / 12).toFixed(1)}</td>
+        <td class="num">${rate} t/h</td>
+        <td><span class="pill pill-d">LOGGED</span></td>
+      `;
+      tbody.appendChild(row);
+    });
   }
 }
 
-// Modal Details Drawer
+// Modal Details Drawer with full raw Supabase parameters
 function openDrawer(scale) {
   document.getElementById('drawer-title').innerText = scale.name;
   document.getElementById('drawer-sub').innerText = `Real-time Telemetry (ID: ${scale.id})`;
   const tbody = document.getElementById('drawer-body');
-  tbody.innerHTML = `
-    <tr><td>Current Feed Rate</td><td class="num"><b>${scale.rate} t/h</b></td></tr>
-    <tr><td>Today's Accumulated Total</td><td class="num"><b>${scale.today} tonnes</b></td></tr>
-    <tr><td>Belt Speed</td><td class="num">${scale.speed} m/s</td></tr>
-    <tr><td>Belt Loading</td><td class="num">${scale.load} kg/m</td></tr>
-    <tr><td>Status Indicator</td><td><span class="dot dot-${scale.status}"></span> ${scale.status.toUpperCase()}</td></tr>
+  
+  let rawRowsHtml = `
+    <tr><td>Feed Rate</td><td class="num"><b>${scale.rate.toFixed(1)} t/h</b></td></tr>
+    <tr><td>Accumulated Tonnage</td><td class="num"><b>${scale.today.toFixed(1)} tonnes</b></td></tr>
+    <tr><td>Belt Speed</td><td class="num">${scale.speed.toFixed(2)} m/s</td></tr>
+    <tr><td>Belt Load</td><td class="num">${scale.load.toFixed(1)} kg/m</td></tr>
+    <tr><td>Last Updated</td><td class="num">${new Date(scale.lastUpdated).toLocaleString()}</td></tr>
   `;
+
+  // Append any extra DB column values from Supabase dynamically
+  if (scale.raw) {
+    Object.keys(scale.raw).forEach(key => {
+      if (!['rate', 'today', 'speed', 'load', 'scale_name', 'name'].includes(key)) {
+        rawRowsHtml += `<tr><td>DB Key: ${key}</td><td class="num">${scale.raw[key]}</td></tr>`;
+      }
+    });
+  }
+
+  tbody.innerHTML = rawRowsHtml;
   document.getElementById('drawer-veil').classList.add('show');
 }
 
@@ -496,39 +582,78 @@ function closeDrawer(e) {
   document.getElementById('drawer-veil').classList.remove('show');
 }
 
-// History filtering simulation
-function filterLogs() {
-  const tbody = document.getElementById('hist-table-body');
-  const now = new Date().toLocaleTimeString();
-  tbody.innerHTML = `
-    <tr><td>${now}</td><td>Plant Feed Scale</td><td class="num">452.1</td><td class="num">3,425.2</td></tr>
-    <tr><td>${now}</td><td>Overland Conveyor</td><td class="num">408.9</td><td class="num">3,104.1</td></tr>
-  `;
+// Dynamically populate scale dropdown in History tab
+function updateHistoryDropdown() {
+  const select = document.getElementById('hist-scale-select');
+  const currentVal = select.value;
+  select.innerHTML = '<option value="all">All Scales</option>';
+
+  Object.keys(state.scalesMap).forEach(id => {
+    const opt = document.createElement('option');
+    opt.value = id;
+    opt.innerText = state.scalesMap[id].name;
+    select.appendChild(opt);
+  });
+
+  select.value = currentVal;
 }
 
-// Simulated data stream tick
-function tick() {
-  state.scales.forEach(sc => {
-    if(sc.status !== 'off') {
-      sc.rate = Math.max(0, sc.rate + (Math.random() * 20 - 10));
-      sc.today += sc.rate / 720; // incremental simulation
+// Query Supabase logs table directly
+async function filterLogs() {
+  const tbody = document.getElementById('hist-table-body');
+  tbody.innerHTML = '<tr><td colspan="4" class="empty">Querying Supabase database...</td></tr>';
+
+  const scaleFilter = document.getElementById('hist-scale-select').value;
+  const dateFilter = document.getElementById('hist-date').value;
+
+  let endpoint = `${SUPABASE_URL}/rest/v1/${state.tableName}?select=*&order=created_at.desc&limit=50`;
+  
+  if (scaleFilter !== 'all') {
+    endpoint += `&scale_id=eq.${scaleFilter}`;
+  }
+
+  try {
+    const response = await fetch(endpoint, { headers: SUPABASE_HEADERS });
+    const data = await response.json();
+
+    if (!data || data.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="4" class="empty">No records found in Supabase matching filters.</td></tr>';
+      return;
     }
-  });
-  renderDash();
-  fetchSupabaseTelemetry();
+
+    tbody.innerHTML = '';
+    data.forEach(log => {
+      const time = log.created_at ? new Date(log.created_at).toLocaleString() : 'N/A';
+      const id = log.scale_id || log.device_id || log.scale || "scale_1";
+      const rate = parseFloat(log.rate || log.flow_rate || log.feed_rate || 0).toFixed(1);
+      const total = parseFloat(log.total || log.today_total || log.tonnes || 0).toFixed(1);
+
+      const row = document.createElement('tr');
+      row.innerHTML = `
+        <td>${time}</td>
+        <td>${id}</td>
+        <td class="num">${rate}</td>
+        <td class="num">${total}</td>
+      `;
+      tbody.appendChild(row);
+    });
+  } catch (err) {
+    console.error("Error querying Supabase history logs:", err);
+    tbody.innerHTML = '<tr><td colspan="4" class="empty">Failed to query historical logs from Supabase.</td></tr>';
+  }
 }
 
 function updateRefreshInterval() {
   const val = document.getElementById('refresh-rate').value;
   state.refreshInterval = parseInt(val, 10);
   clearInterval(state.timer);
-  state.timer = setInterval(tick, state.refreshInterval);
+  state.timer = setInterval(fetchLiveTelemetry, state.refreshInterval);
 }
 
-// Initial setup
-renderDash();
+// Initial Live Execution
+fetchLiveTelemetry();
 setRptMode('shift', document.querySelector('.seg button'));
-state.timer = setInterval(tick, state.refreshInterval);
+state.timer = setInterval(fetchLiveTelemetry, state.refreshInterval);
 </script>
 </body>
 </html>
