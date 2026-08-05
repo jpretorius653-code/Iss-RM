@@ -101,7 +101,9 @@ html,body{height:100%;background:var(--bg);color:var(--ink);
   cursor:pointer;transition:border-color .15s}
 .scale-card:active{border-color:var(--blue)}
 .sc-name{font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);margin-bottom:8px;
-  display:flex;align-items:center;justify-content:space-between}
+  display:flex;align-items:center;justify-content:space-between;gap:8px}
+.sc-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.sc-right{display:flex;align-items:center;gap:6px;flex:none}
 .sc-rate{font-size:32px;font-weight:900;letter-spacing:-.5px;line-height:1}
 .sc-unit{font-size:12px;color:var(--muted);font-weight:600}
 .sc-subs{display:flex;gap:12px;margin-top:8px;font-size:12px;color:var(--muted)}
@@ -479,17 +481,17 @@ function scaleCardHTML(s){
   const r = state[s.device];
   const on = isOnline(r,s);
   const dc = dotClass(r,s), st = statusText(r,s);
-  const siteTag = (s.site && s.site!=="") ? `<span style="font-size:10px;color:var(--muted);margin-left:4px">${s.site}</span>` : '';
+  const siteTag = (s.site && s.site!=="") ? `<span style="font-size:10px;color:var(--muted)">${s.site}</span>` : '';
   const border = on ? 'var(--line)' : 'var(--red)';
   if(s.role==="weighbridge"){
     return `<div class="scale-card" style="border-color:${border}" onclick="showScaleHistory('${s.device}','${s.name}')">
-      <div class="sc-name">${s.name}${siteTag} <span class="dot ${dc}"></span></div>
+      <div class="sc-name"><span class="sc-title">${s.name}</span><span class="sc-right">${siteTag}<span class="dot ${dc}"></span></span></div>
       <div class="sc-rate num">${on?nz(r.weight):"--"}<span class="sc-unit"> kg</span></div>
       <div class="sc-subs"><span style="font-size:11px;color:var(--muted)">${st}</span></div>
     </div>`;
   }
   return `<div class="scale-card" style="border-color:${border}" onclick="showScaleHistory('${s.device}','${s.name}')">
-    <div class="sc-name">${s.name}${siteTag} <span class="dot ${dc}"></span></div>
+    <div class="sc-name"><span class="sc-title">${s.name}</span><span class="sc-right">${siteTag}<span class="dot ${dc}"></span></span></div>
     <div class="sc-rate num">${on?fmt(r.rate):"--"}<span class="sc-unit"> t/h</span></div>
     <div class="sc-subs">
       <span>Speed <b class="num">${on?fmt(nz(r.speed),2):"--"}</b> m/s</span>
