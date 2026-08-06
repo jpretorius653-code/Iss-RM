@@ -250,7 +250,7 @@ input{width:100%}
   <div class="page" id="pg-reports">
     <div class="eyebrow">Reports</div>
     <div class="filter-row">
-      <select id="rType" style="flex:1">
+      <select id="rType" style="flex:1" onchange="toggleWbFilters()">
         <option value="belt">Belt scales</option>
         <option value="wb">Weighbridge</option>
       </select>
@@ -259,6 +259,17 @@ input{width:100%}
       <input type="date" id="rFrom" style="flex:1">
       <input type="date" id="rTo" style="flex:1">
       <button onclick="genReport()" style="background:#2183C2;color:#fff;border:0;border-radius:8px;padding:9px 14px;font-weight:700">Generate</button>
+    </div>
+    <div id="wbFilters" style="display:none">
+      <div class="filter-row">
+        <input id="fTicket" placeholder="Ticket #" style="flex:1" autocapitalize="off">
+        <input id="fBatch"  placeholder="Batch #"  style="flex:1" autocapitalize="off">
+      </div>
+      <div class="filter-row">
+        <input id="fTransporter" placeholder="Transporter" style="flex:1" autocapitalize="off">
+        <input id="fCustomer"    placeholder="Customer"    style="flex:1" autocapitalize="off">
+        <input id="fProduct"     placeholder="Product"     style="flex:1" autocapitalize="off">
+      </div>
     </div>
     <div id="rptChart" style="margin:6px 0"></div>
     <div id="rptBody"><div class="empty">Pick a type and date range, then Generate.</div></div>
@@ -713,7 +724,8 @@ function setDays(d){  // used at boot to default the date inputs
   if(F) F.value=from.toISOString().slice(0,10);
   if(T) T.value=to.toISOString().slice(0,10);
 }
-function loadReports(){ const F=$("rFrom"); if(F && !F.value) setDays(0); }  // init only
+function loadReports(){ const F=$("rFrom"); if(F && !F.value) setDays(0); toggleWbFilters(); }  // init only
+function toggleWbFilters(){ const w=$("wbFilters"); if(w) w.style.display = ($("rType").value==="wb")?"":"none"; }
 
 async function genReport(){
   const type=$("rType").value;
@@ -770,25 +782,35 @@ function barChart(combined){
 
 async function genWeighbridge(from,to){
   const fISO=from.toISOString(), tISO=to.toISOString();
+  // server-side filters that map cleanly to columns
+  let q=`transactions?select=*&time_in=gte.${fISO}&time_in=lte.${tISO}&order=time_in.desc&limit=5000`;
+  const ilike=(col,val)=>{ if(val && val.trim()) return `&${col}=ilike.*${encodeURIComponent(val.trim())}*`; return ""; };
+  q+=ilike("ticket",$("fTicket")?.value);
+  q+=ilike("batch_no",$("fBatch")?.value);
+  q+=ilike("transporter",$("fTransporter")?.value);
+  q+=ilike("customer",$("fCustomer")?.value);
+  q+=ilike("product",$("fProduct")?.value);
   let rows=[];
-  try{ rows=await sb(`transactions?select=*&time_in=gte.${fISO}&time_in=lte.${tISO}&order=time_in.desc&limit=2000`); }catch(e){}
+  try{ rows=await sb(q); }catch(e){}
   REPORT={type:"wb", rows};
   $("rptChart").innerHTML='';
   const body=rows.map(r=>{ const ti=r.time_in?new Date(r.time_in):null, tо=r.time_out?new Date(r.time_out):null;
-    return `<tr><td>${ti?dLabel(ti.getTime()):'--'}</td><td>${ti?hLabel(ti):'--'}</td><td>${tо?hLabel(tо):'--'}</td>
-      <td>${r.ticket||'--'}</td><td style="font-family:monospace">${r.reg||'--'}</td><td>${r.customer||'--'}</td>
-      <td>${r.product||'--'}</td><td class="num">${r.net!=null?fmt(r.net):'--'}</td></tr>`; }).join("");
-  $("rptBody").innerHTML=`<div class="eyebrow">Transactions (${rows.length})</div>
-    <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>In</th><th>Out</th><th>Ticket</th><th>Reg</th><th>Customer</th><th>Product</th><th>Net t</th></tr></thead>
-    <tbody>${body||'<tr><td colspan="8" class="empty">No transactions in range</td></tr>'}</tbody></table></div>`;
+    return `<tr><td>${ti?dLabel(ti.getTime()):'--'}</td><td>${ti?hLabel(ti):'--'}</td>
+      <td>${r.ticket||'--'}</td><td>${r.batch_no||'--'}</td><td style="font-family:monospace">${r.reg||'--'}</td>
+      <td>${r.transporter||'--'}</td><td>${r.customer||'--'}</td><td>${r.product||'--'}</td>
+      <td class="num">${r.net!=null?fmt(r.net):'--'}</td></tr>`; }).join("");
+  const totNet=rows.reduce((a,r)=>a+nz(r.net),0);
+  $("rptBody").innerHTML=`<div class="eyebrow">Transactions (${rows.length}) · ${fmt(totNet,1)} t net</div>
+    <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>In</th><th>Ticket</th><th>Batch</th><th>Reg</th><th>Transporter</th><th>Customer</th><th>Product</th><th>Net t</th></tr></thead>
+    <tbody>${body||'<tr><td colspan="9" class="empty">No transactions match</td></tr>'}</tbody></table></div>`;
   $("rptStatus").textContent=`${rows.length} transaction(s)`;
 }
 
 function exportReportCSV(){
   if(!REPORT){ alert("Generate a report first."); return; }
   if(REPORT.type==="wb"){
-    const rows=[["Date","Time In","Time Out","Ticket","Reg","Customer","Product","Net t","Tare kg"]];
-    REPORT.rows.forEach(r=>rows.push([r.time_in?dLabel(new Date(r.time_in).getTime()):"", r.time_in?hLabel(new Date(r.time_in)):"", r.time_out?hLabel(new Date(r.time_out)):"", r.ticket||"", r.reg||"", r.customer||"", r.product||"", r.net==null?"":r.net, r.empty_weight==null?"":r.empty_weight]));
+    const rows=[["Date","Time In","Time Out","Ticket","Batch","Reg","Transporter","Customer","Supplier","Destination","Driver","Product","Net t","Tare kg"]];
+    REPORT.rows.forEach(r=>rows.push([r.time_in?dLabel(new Date(r.time_in).getTime()):"", r.time_in?hLabel(new Date(r.time_in)):"", r.time_out?hLabel(new Date(r.time_out)):"", r.ticket||"", r.batch_no||"", r.reg||"", r.transporter||"", r.customer||"", r.supplier||"", r.destination||"", r.driver||"", r.product||"", r.net==null?"":r.net, r.empty_weight==null?"":r.empty_weight]));
     csvDownload("weighbridge_report.csv", rows);
   } else {
     const rows=[["Date","Feed t","Product t","Yield %"]];
@@ -802,8 +824,8 @@ function exportXLSX(){
   if(typeof XLSX==="undefined"){ alert("Excel library still loading — try again in a moment."); return; }
   const wb=XLSX.utils.book_new();
   if(REPORT.type==="wb"){
-    const detail=[["Date","Time In","Time Out","Ticket","Reg","Customer","Product","Net t","Tare kg"]];
-    REPORT.rows.forEach(r=>detail.push([r.time_in?dLabel(new Date(r.time_in).getTime()):"", r.time_in?hLabel(new Date(r.time_in)):"", r.time_out?hLabel(new Date(r.time_out)):"", r.ticket||"", r.reg||"", r.customer||"", r.product||"", r.net==null?"":r.net, r.empty_weight==null?"":r.empty_weight]));
+    const detail=[["Date","Time In","Time Out","Ticket","Batch","Reg","Transporter","Customer","Supplier","Destination","Driver","Product","Net t","Tare kg"]];
+    REPORT.rows.forEach(r=>detail.push([r.time_in?dLabel(new Date(r.time_in).getTime()):"", r.time_in?hLabel(new Date(r.time_in)):"", r.time_out?hLabel(new Date(r.time_out)):"", r.ticket||"", r.batch_no||"", r.reg||"", r.transporter||"", r.customer||"", r.supplier||"", r.destination||"", r.driver||"", r.product||"", r.net==null?"":r.net, r.empty_weight==null?"":r.empty_weight]));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(detail), "Transactions");
     const byP={}; REPORT.rows.forEach(r=>{ const p=r.product||"(none)"; byP[p]=byP[p]||{n:0,t:0}; byP[p].n++; byP[p].t+=nz(r.net); });
     const sum=[["Product","Loads","Net t"]]; Object.entries(byP).forEach(([p,v])=>sum.push([p,v.n,+v.t.toFixed(1)]));
