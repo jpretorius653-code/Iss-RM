@@ -824,13 +824,44 @@ function exportXLSX(){
   if(typeof XLSX==="undefined"){ alert("Excel library still loading — try again in a moment."); return; }
   const wb=XLSX.utils.book_new();
   if(REPORT.type==="wb"){
-    const detail=[["Date","Time In","Time Out","Ticket","Batch","Reg","Transporter","Customer","Supplier","Destination","Driver","Product","Net t","Tare kg"]];
-    REPORT.rows.forEach(r=>detail.push([r.time_in?dLabel(new Date(r.time_in).getTime()):"", r.time_in?hLabel(new Date(r.time_in)):"", r.time_out?hLabel(new Date(r.time_out)):"", r.ticket||"", r.batch_no||"", r.reg||"", r.transporter||"", r.customer||"", r.supplier||"", r.destination||"", r.driver||"", r.product||"", r.net==null?"":r.net, r.empty_weight==null?"":r.empty_weight]));
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(detail), "Transactions");
-    const byP={}; REPORT.rows.forEach(r=>{ const p=r.product||"(none)"; byP[p]=byP[p]||{n:0,t:0}; byP[p].n++; byP[p].t+=nz(r.net); });
-    const sum=[["Product","Loads","Net t"]]; Object.entries(byP).forEach(([p,v])=>sum.push([p,v.n,+v.t.toFixed(1)]));
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(sum), "Summary");
-    XLSX.writeFile(wb, "ISS_Weighbridge_Report.xlsx");
+    const rows=REPORT.rows||[];
+    const site = (rows.find(r=>r.site)||{}).site || "";
+    const dOnly = t => t? new Date(t).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}) : "";
+    const tOnly = t => t? new Date(t).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}) : "";
+    const period = ($("rFrom").value||"") + " to " + ($("rTo").value||"");
+    const aoa=[];
+    aoa.push([site+" Weighbridge — Records Report"]);
+    aoa.push(["Site", site]);
+    aoa.push(["Period", period]);
+    aoa.push(["Generated", new Date().toLocaleString('en-GB')]);
+    aoa.push([]);
+    const HEAD=["Ticket","Destination","Customer","Product","Action","Date","Time In","Reg",
+      "Empty Weight (kg)","Full Weight (kg)","Net (kg)","Batch No","Time Out","Dispatch Ticket Nr",
+      "Transporter","Order","Trailer 1","Trailer 2","Seal No","Bridge","Operator","Driver","Supplier"];
+    aoa.push(HEAD);
+    let totNet=0; const byProd={};
+    rows.forEach(r=>{
+      const net = r.net==null?null:Number(r.net);
+      if(net!=null) totNet+=net;
+      const p=r.product||"(none)"; if(net!=null){ byProd[p]=(byProd[p]||0)+net; }
+      aoa.push([
+        r.ticket||"", r.destination||"", r.customer||"", r.product||"", r.action||"",
+        dOnly(r.time_in), tOnly(r.time_in), r.reg||"",
+        r.empty_weight==null?"":Number(r.empty_weight), r.full_weight==null?"":Number(r.full_weight),
+        net==null?"":net, r.batch_no||"", tOnly(r.time_out), r.dispatch_ticket||"",
+        r.transporter||"", r.order_no||"", r.trailer1||"", r.trailer2||"", r.seal_no||"",
+        r.bridge||"", r.operator||"", r.driver||"", r.supplier||""
+      ]);
+    });
+    aoa.push(["TOTAL","","","","","","", "", "", "", totNet, "", "", "", "", "", "", "", "", "", "", "", ""]);
+    aoa.push(["","","","","","","","","", "Net tonnes", +(totNet/1000).toFixed(2)]);
+    aoa.push([]);
+    aoa.push(["Product Summary","","Tonnes"]);
+    Object.entries(byProd).forEach(([p,kg])=>aoa.push([p,"",+(kg/1000).toFixed(2)]));
+    const ws=XLSX.utils.aoa_to_sheet(aoa);
+    ws['!cols']=HEAD.map((h,i)=>({wch: [8,14,12,16,12,12,9,12,14,14,12,14,9,16,14,14,12,12,14,10,12,14,14][i]||12}));
+    XLSX.utils.book_append_sheet(wb, ws, "Records");
+    XLSX.writeFile(wb, "Weighbridge_Records_"+($("rFrom").value||"")+".xlsx");
   } else {
     REPORT.belts.forEach(s=>{
       const aoa=[["Date","Hour","Shift","Opening t","Closing t","Tons"]];
