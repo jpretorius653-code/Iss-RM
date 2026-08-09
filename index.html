@@ -819,20 +819,51 @@ function exportReportCSV(){
   }
 }
 function safeSheet(n){ return (n||"Sheet").replace(/[\\/?*\[\]:]/g,"").slice(0,31)||"Sheet"; }
+
+// ── weighbridge report helpers ───────────────────────────────
+// Client-facing report title per site. Add a line as new sites come on.
+const WB_SITE_TITLES = { hillside: "Hillside Complex" };
+
+// TEMPORARY — until Cloud Sync is rebuilt on the site PC.
+// Cloud Sync currently uploads the order's INTERNAL id (e.g. "O1785911141047")
+// instead of the order number the client's report needs. Add a line per live
+// order; anything unmatched is left blank rather than showing the raw id.
+const WB_ORDER_NUMBERS = {
+  "O1785911141047": "BCH010-SP/A41",
+  "O1785911391234": "SO00000192"
+};
+function wbOrderNo(v){
+  const s = (v==null ? "" : String(v)).trim();
+  if(!s) return null;
+  if(WB_ORDER_NUMBERS[s]) return WB_ORDER_NUMBERS[s];
+  return /^O\d{10,}$/.test(s) ? null : s;   // never show an internal id
+}
+// Excel serials, computed directly so no timezone shift can creep in.
+function wbDateSerial(d){
+  return Math.floor((Date.UTC(d.getFullYear(),d.getMonth(),d.getDate()) - Date.UTC(1899,11,30))/86400000);
+}
+function wbTimeSerial(d){
+  return (d.getHours()*3600 + d.getMinutes()*60 + d.getSeconds())/86400;
+}
+function wbTxt(v){ const s=(v==null?"":String(v)).trim(); return s||null; }
+function wbNum(v){ const n=parseFloat(v); return isFinite(n)?n:null; }
 function exportXLSX(){
   if(!REPORT){ alert("Generate a report first."); return; }
   if(typeof XLSX==="undefined"){ alert("Excel library still loading — try again in a moment."); return; }
   const wb=XLSX.utils.book_new();
   if(REPORT.type==="wb"){
-    const rows=REPORT.rows||[];
-    const site = (rows.find(r=>r.site)||{}).site || "";
-    const dOnly = t => t? new Date(t).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}) : "";
-    const tOnly = t => t? new Date(t).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}) : "";
-    const period = ($("rFrom").value||"") + " to " + ($("rTo").value||"");
-    const aoa=[];
-    aoa.push([site+" Weighbridge — Records Report"]);
+    // completed tickets only — trucks still on site never appear in the client's report
+    const rows=(REPORT.rows||[]).filter(r=>r && r.status!=="open"
+      && r.ticket!=null && String(r.ticket).trim()!=="");
+    // newest ticket first, as the client's file is sorted
+    rows.sort((a,b)=>{ const x=parseFloat(a.ticket), y=parseFloat(b.ticket);
+      return (isFinite(x)&&isFinite(y)) ? y-x : String(b.ticket).localeCompare(String(a.ticket)); });
+    const site = (rows.find(r=>r.site)||(REPORT.rows||[])[0]||{}).site || "";
+    const from = $("rFrom").value||"", to = $("rTo").value||"";
+    const aoa=[], typed=[];   // typed = real date/time cells patched in after
+    aoa.push([(WB_SITE_TITLES[site.toLowerCase()]||site)+" Weighbridge — Records Report"]);
     aoa.push(["Site", site]);
-    aoa.push(["Period", period]);
+    aoa.push(["Period", from+" to "+to]);
     aoa.push(["Generated", new Date().toLocaleString('en-GB')]);
     aoa.push([]);
     const HEAD=["Ticket","Destination","Customer","Product","Action","Date","Time In","Reg",
@@ -841,27 +872,53 @@ function exportXLSX(){
     aoa.push(HEAD);
     let totNet=0; const byProd={};
     rows.forEach(r=>{
-      const net = r.net==null?null:Number(r.net);
-      if(net!=null) totNet+=net;
-      const p=r.product||"(none)"; if(net!=null){ byProd[p]=(byProd[p]||0)+net; }
-      aoa.push([
-        r.ticket||"", r.destination||"", r.customer||"", r.product||"", r.action||"",
-        dOnly(r.time_in), tOnly(r.time_in), r.reg||"",
-        r.empty_weight==null?"":Number(r.empty_weight), r.full_weight==null?"":Number(r.full_weight),
-        net==null?"":net, r.batch_no||"", tOnly(r.time_out), r.dispatch_ticket||"",
-        r.transporter||"", r.order_no||"", r.trailer1||"", r.trailer2||"", r.seal_no||"",
-        r.bridge||"", r.operator||"", r.driver||"", r.supplier||""
-      ]);
+      const rIdx=aoa.length;
+      const ti=r.time_in?new Date(r.time_in):null, to_=r.time_out?new Date(r.time_out):null;
+      const net=wbNum(r.net);
+      if(net!=null){ totNet+=net; const p=wbTxt(r.product)||"(none)"; byProd[p]=(byProd[p]||0)+net; }
+      const line=new Array(HEAD.length).fill(null);
+      line[0]  = /^\d+$/.test(String(r.ticket).trim()) ? parseInt(r.ticket,10) : wbTxt(r.ticket);
+      line[1]  = wbTxt(r.destination);
+      line[2]  = wbTxt(r.customer);
+      line[3]  = wbTxt(r.product);
+      line[4]  = wbTxt(r.action);
+      line[7]  = wbTxt(r.reg);
+      line[8]  = wbNum(r.empty_weight);
+      line[9]  = wbNum(r.full_weight);
+      line[10] = net;
+      line[11] = wbTxt(r.batch_no);
+      line[13] = wbTxt(r.dispatch_ticket);
+      line[14] = wbTxt(r.transporter);
+      line[15] = wbOrderNo(r.order_no);      // order NUMBER, never the internal id
+      line[16] = wbTxt(r.trailer1);
+      line[17] = wbTxt(r.trailer2);
+      line[18] = wbTxt(r.seal_no);
+      line[19] = wbTxt(r.bridge);
+      line[20] = wbTxt(r.operator);
+      line[21] = wbTxt(r.driver);
+      line[22] = wbTxt(r.supplier);
+      aoa.push(line);
+      if(ti && !isNaN(ti)){
+        typed.push({r:rIdx,c:5, v:wbDateSerial(ti), z:"mm-dd-yy"});   // Date
+        typed.push({r:rIdx,c:6, v:wbTimeSerial(ti), z:"h:mm"});       // Time In
+      }
+      if(to_ && !isNaN(to_)) typed.push({r:rIdx,c:12, v:wbTimeSerial(to_), z:"h:mm"});  // Time Out
     });
-    aoa.push(["TOTAL","","","","","","", "", "", "", totNet, "", "", "", "", "", "", "", "", "", "", "", ""]);
-    aoa.push(["","","","","","","","","", "Net tonnes", +(totNet/1000).toFixed(2)]);
+    const totRow=new Array(HEAD.length).fill(null);
+    totRow[0]="TOTAL"; totRow[7]=rows.length+" loads"; totRow[10]=totNet;
+    aoa.push(totRow);
+    const tonRow=new Array(HEAD.length).fill(null);
+    tonRow[9]="Net tonnes"; tonRow[10]=+(totNet/1000).toFixed(2);
+    aoa.push(tonRow);
     aoa.push([]);
-    aoa.push(["Product Summary","","Tonnes"]);
-    Object.entries(byProd).forEach(([p,kg])=>aoa.push([p,"",+(kg/1000).toFixed(2)]));
+    aoa.push(["Product Summary",null,"Tonnes"]);
+    Object.entries(byProd).forEach(([p,kg])=>aoa.push([p,null,+(kg/1000).toFixed(2)]));
     const ws=XLSX.utils.aoa_to_sheet(aoa);
-    ws['!cols']=HEAD.map((h,i)=>({wch: [8,14,12,16,12,12,9,12,14,14,12,14,9,16,14,14,12,12,14,10,12,14,14][i]||12}));
-    XLSX.utils.book_append_sheet(wb, ws, "Records");
-    XLSX.writeFile(wb, "Weighbridge_Records_"+($("rFrom").value||"")+".xlsx");
+    typed.forEach(c=>{ ws[XLSX.utils.encode_cell({r:c.r,c:c.c})]={t:"n",v:c.v,z:c.z}; });
+    Object.keys(ws).forEach(k=>{ if(k[0]!=="!" && ws[k] && ws[k].t==="s" && ws[k].v==="") delete ws[k]; });
+    ws['!cols']=HEAD.map((h,i)=>({wch: [10,13,12,18,12,11,8,12,16,15,11,13,8,17,13,15,11,11,16,9,11,14,13][i]||12}));
+    XLSX.utils.book_append_sheet(wb, ws, safeSheet("REPORT Records-"+from+"_"+to));
+    XLSX.writeFile(wb, "REPORT Records-"+from+"_"+to+".xlsx");
   } else {
     REPORT.belts.forEach(s=>{
       const aoa=[["Date","Hour","Shift","Opening t","Closing t","Tons"]];
