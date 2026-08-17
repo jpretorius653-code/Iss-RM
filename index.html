@@ -83,7 +83,8 @@ html,body{height:100%;background:var(--bg);color:var(--ink);
 .plant-hero{
   background:linear-gradient(140deg,var(--navy),#0d1118);
   border:1px solid var(--line);border-radius:16px;padding:18px;margin-bottom:12px;
-  position:relative;overflow:hidden
+  position:relative;overflow:hidden;
+  display:flex;gap:16px;flex-wrap:wrap;justify-content:space-between;align-items:flex-start
 }
 .plant-hero::before{content:'';position:absolute;inset:0;
   background:radial-gradient(ellipse 60% 50% at 80% 30%,rgba(41,171,226,.08),transparent)}
@@ -94,6 +95,16 @@ html,body{height:100%;background:var(--bg);color:var(--ink);
 .ph-stat{flex:1;min-width:70px}
 .ph-stat b{display:block;font-size:18px;font-weight:800}
 .ph-stat span{font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--muted)}
+.ph-main{flex:1 1 240px;min-width:0;position:relative;z-index:1}
+.ph-totals{flex:0 0 auto;position:relative;z-index:1;min-width:158px;
+  border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:rgba(12,20,30,.35)}
+.ph-totals .pht-cap{font-size:9px;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
+.ph-totals .pht-head,.ph-totals .pht-row{display:grid;grid-template-columns:46px 1fr 1fr;gap:8px;align-items:baseline}
+.ph-totals .pht-head{font-size:9px;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin-bottom:4px}
+.ph-totals .pht-head span{text-align:right}
+.ph-totals .pht-row{padding:3px 0}
+.ph-totals .pht-row>span{font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--muted)}
+.ph-totals .pht-row>b{font-size:14px;font-weight:800;text-align:right;font-variant-numeric:tabular-nums}
 
 /* ── scale cards ─────────────────────────────────────────── */
 .scale-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin-bottom:12px}
@@ -215,15 +226,24 @@ input{width:100%}
   <!-- PLANT -->
   <div class="page active" id="pg-plant">
     <div class="plant-hero">
-      <div class="ph-label">Plant feed flow</div>
-      <div style="display:flex;align-items:flex-end;gap:6px;margin:4px 0">
-        <div class="ph-val num" id="pFeed">--</div>
-        <div class="ph-unit">t/h</div>
+      <div class="ph-main">
+        <div class="ph-label">Plant feed flow</div>
+        <div style="display:flex;align-items:flex-end;gap:6px;margin:4px 0">
+          <div class="ph-val num" id="pFeed">--</div>
+          <div class="ph-unit">t/h</div>
+        </div>
+        <div class="ph-row">
+          <div class="ph-stat"><b class="num" id="pYield">--</b><span>Yield (last hr)</span></div>
+          <div class="ph-stat"><b class="num" id="pYieldDay">--</b><span>Yield (today)</span></div>
+          <div class="ph-stat"><b class="num" id="pLoss">--</b><span>Slurry/spiral (prog)</span></div>
+        </div>
       </div>
-      <div class="ph-row">
-        <div class="ph-stat"><b class="num" id="pProd">--</b><span>Product t/h</span></div>
-        <div class="ph-stat"><b class="num" id="pYield">--</b><span>Yield (last hr)</span></div>
-        <div class="ph-stat"><b class="num" id="pYieldDay">--</b><span>Yield (today)</span></div>
+      <div class="ph-totals" id="phTotals">
+        <div class="pht-cap">Tonnes</div>
+        <div class="pht-head"><span></span><span>Hr</span><span>Prog</span></div>
+        <div class="pht-row"><span>Feed</span><b id="tFeedHr">--</b><b id="tFeedPr">--</b></div>
+        <div class="pht-row"><span>Prod</span><b id="tProdHr">--</b><b id="tProdPr">--</b></div>
+        <div class="pht-row"><span>Disc</span><b id="tDiscHr">--</b><b id="tDiscPr">--</b></div>
       </div>
     </div>
     <div class="eyebrow">Live scales</div>
@@ -574,6 +594,11 @@ async function discoverScales(){
     });
   }
   ALL_SITES = Array.from(siteset).filter(Boolean).sort();
+  const ROLE_ORDER = { feed:0, product:1, discard:2, slurry:3, other:4, weighbridge:5, gateway:6 };
+  keep.sort((a,b)=>{
+    const ra=(ROLE_ORDER[a.role]??9), rb=(ROLE_ORDER[b.role]??9);
+    return ra-rb || (a.name||'').localeCompare(b.name||'');
+  });
   SCALES = keep;
 }
 
@@ -597,7 +622,6 @@ async function refreshScales(){
   const feed = SCALES.filter(s=>s.role==="feed").reduce((a,s)=>a+nz(state[s.device]?.rate),0);
   const prod = SCALES.filter(s=>s.role==="product").reduce((a,s)=>a+nz(state[s.device]?.rate),0);
   $("pFeed").textContent = fmt(feed);   // live rate (from readings)
-  $("pProd").textContent = fmt(prod);   // live rate (from readings)
   // Yield tiles are set from the permanent hourly ledger in refreshPlantHourly()
   $("plantScales").innerHTML = SCALES.filter(s=>s.role!=="weighbridge"&&s.role!=="gateway").map(scaleCardHTML).join("");
   $("allScales").innerHTML = SCALES.filter(s=>s.role!=="gateway").map(scaleCardHTML).join("");
@@ -624,7 +648,7 @@ async function refreshScales(){
 }
 
 async function refreshPlantHourly(){
-  const belts=SCALES.filter(s=>["feed","product"].includes(s.role));
+  const belts=SCALES.filter(s=>["feed","product","discard"].includes(s.role));
   if(!belts.length){ $("plantHourly").innerHTML='<tr><td colspan="6" class="empty">Assign a Feed / Product scale in Admin</td></tr>'; return; }
   const since=new Date(Date.now()-48*3600*1000).toISOString();
   const per={};
@@ -632,7 +656,7 @@ async function refreshPlantHourly(){
     try{ per[s.device]=await sb(`hourly?select=hour,tons&device=eq.${encodeURIComponent(s.device)}&hour=gte.${since}&order=hour.asc`); }
     catch(e){ per[s.device]=[]; }
   }));
-  const feeds=belts.filter(s=>s.role==="feed"), prods=belts.filter(s=>s.role==="product");
+  const feeds=belts.filter(s=>s.role==="feed"), prods=belts.filter(s=>s.role==="product"), discs=belts.filter(s=>s.role==="discard");
   const tAt=(dev,k)=>{ const h=per[dev]?.find(x=>new Date(x.hour).getTime()===k); return h?h.tons:0; };
   const hours=[...new Set(belts.flatMap(s=>(per[s.device]||[]).map(h=>new Date(h.hour).getTime())))].sort();
   PLANT_HOURS = { hours, per, feeds, prods };   // cached for CSV export
@@ -650,12 +674,24 @@ async function refreshPlantHourly(){
   // Yield tiles — last completed hour + progressive since 06:00
   const nowH=new Date(); nowH.setMinutes(0,0,0);
   const lastK=hours.filter(k=>k<nowH.getTime()).pop();
-  if(lastK!=null){ const f=feeds.reduce((a,s)=>a+tAt(s.device,lastK),0), p=prods.reduce((a,s)=>a+tAt(s.device,lastK),0);
+  const sumAt=(arr,k)=>arr.reduce((a,s)=>a+tAt(s.device,k),0);
+  if(lastK!=null){ const f=sumAt(feeds,lastK), p=sumAt(prods,lastK);
     $("pYield").textContent = f>0?fmt(p/f*100,1)+"%":"--"; }
   else $("pYield").textContent="--";
-  const day6=dayStart6(new Date()).getTime(); let df=0,dp=0;
-  hours.filter(k=>k>=day6).forEach(k=>{ df+=feeds.reduce((a,s)=>a+tAt(s.device,k),0); dp+=prods.reduce((a,s)=>a+tAt(s.device,k),0); });
-  const dy=$("pYieldDay"); if(dy) dy.textContent = df>0?fmt(dp/df*100,1)+"%":"--";
+  const day6=dayStart6(new Date()).getTime();
+  const progHours=hours.filter(k=>k>=day6);
+  const sumProg=arr=>progHours.reduce((t,k)=>t+sumAt(arr,k),0);
+  const fPr=sumProg(feeds), pPr=sumProg(prods), dPr=sumProg(discs);
+  const dy=$("pYieldDay"); if(dy) dy.textContent = fPr>0?fmt(pPr/fPr*100,1)+"%":"--";
+  // Slurry/spiral (progressive): (feed − prod − discard) ÷ feed × 100
+  const slur = fPr>0 ? (fPr-pPr-dPr)/fPr*100 : null;
+  const pl=$("pLoss"); if(pl) pl.textContent = slur==null?"--":fmt(slur,1)+"%";
+  // Totals panel — hourly (last completed hour) + progressive since 06:00
+  const fHr=lastK!=null?sumAt(feeds,lastK):0, pHr=lastK!=null?sumAt(prods,lastK):0, dHr=lastK!=null?sumAt(discs,lastK):0;
+  const setT=(id,v)=>{ const el=$(id); if(el) el.textContent=fmt(v,1); };
+  setT("tFeedHr",fHr); setT("tFeedPr",fPr);
+  setT("tProdHr",pHr); setT("tProdPr",pPr);
+  setT("tDiscHr",dHr); setT("tDiscPr",dPr);
 }
 
 let PLANT_HOURS = null;
