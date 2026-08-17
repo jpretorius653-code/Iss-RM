@@ -683,8 +683,8 @@ async function refreshPlantHourly(){
   const sumProg=arr=>progHours.reduce((t,k)=>t+sumAt(arr,k),0);
   const fPr=sumProg(feeds), pPr=sumProg(prods), dPr=sumProg(discs);
   const dy=$("pYieldDay"); if(dy) dy.textContent = fPr>0?fmt(pPr/fPr*100,1)+"%":"--";
-  // Slurry/spiral (progressive): (feed − prod − discard) ÷ feed × 100
-  const slur = fPr>0 ? (fPr-pPr-dPr)/fPr*100 : null;
+  // Slurry/spiral (progressive): (feed − product) ÷ feed × 100  — discard is a separate accounted stream, not in here
+  const slur = fPr>0 ? (fPr-pPr)/fPr*100 : null;
   const pl=$("pLoss"); if(pl) pl.textContent = slur==null?"--":fmt(slur,1)+"%";
   // Totals panel — hourly (last completed hour) + progressive since 06:00
   const fHr=lastK!=null?sumAt(feeds,lastK):0, pHr=lastK!=null?sumAt(prods,lastK):0, dHr=lastK!=null?sumAt(discs,lastK):0;
