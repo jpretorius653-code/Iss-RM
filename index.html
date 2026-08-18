@@ -96,6 +96,9 @@ html,body{height:100%;background:var(--bg);color:var(--ink);
 .ph-stat b{display:block;font-size:18px;font-weight:800}
 .ph-stat span{font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--muted)}
 .ph-main{flex:1 1 240px;min-width:0;position:relative;z-index:1}
+.ph-y15{margin-left:16px;padding-left:16px;border-left:1px solid var(--line);text-align:left}
+.ph-y15 b{display:block;font-size:22px;font-weight:800;line-height:1.05;color:#37c98a;font-variant-numeric:tabular-nums}
+.ph-y15 span{font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--muted)}
 .ph-totals{flex:0 0 auto;position:relative;z-index:1;min-width:158px;
   border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:rgba(12,20,30,.35)}
 .ph-totals .pht-cap{font-size:9px;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
@@ -240,9 +243,10 @@ input{width:100%}
     <div class="plant-hero">
       <div class="ph-main">
         <div class="ph-label">Plant feed flow</div>
-        <div style="display:flex;align-items:flex-end;gap:6px;margin:4px 0">
+        <div style="display:flex;align-items:flex-end;gap:6px;margin:4px 0;flex-wrap:wrap">
           <div class="ph-val num" id="pFeed">--</div>
           <div class="ph-unit">t/h</div>
+          <div class="ph-y15"><b class="num" id="pY15">--</b><span>15-min yield</span></div>
         </div>
         <div class="ph-row">
           <div class="ph-stat"><b class="num" id="pProdY">--</b><span>Product yield (today)</span></div>
@@ -452,7 +456,7 @@ async function sbPost(path, body){
     headers:{...authHeaders(), "Content-Type":"application/json", "Prefer":"return=minimal"},
     body: JSON.stringify(body)
   });
-  if(!r.ok) throw new Error(r.status);
+  if(!r.ok){ let d=""; try{ d=(await r.text()).slice(0,300); }catch(e){} throw new Error(r.status + (d?": "+d:"")); }
 }
 
 // ── Coal source + RD ("now washing") ─────────────────────────
@@ -495,7 +499,7 @@ async function setSource(){
   if(!source){ alert("Pick a source first (add sources in Admin)."); return; }
   if(rd!=null && (isNaN(rd)||rd<0)){ alert("Enter a valid RD (e.g. 1.55)."); return; }
   try{
-    await sbPost("source_log", { site: plantSite(), source, rd, set_by: (MY_SITE||"app") });
+    await sbPost("source_log", { site: plantSite(), source, rd });
     if(rdEl) rdEl.value="";
     await refreshCurrentSource();
   }catch(e){ alert("Could not set source ("+e.message+")."); }
@@ -595,7 +599,7 @@ async function addSource(){
     await sbPost("sources", { name, site: plantSite()||null, active:true });
     $("srcAddName").value=""; $("srcAdminStatus").textContent="Added "+name;
     SRC_LIST=null; SRC_SIG=""; await renderSrcMgr(); await loadSources();
-  }catch(e){ $("srcAdminStatus").textContent = e.message==="409" ? "That source already exists for this site." : "Add failed ("+e.message+")"; }
+  }catch(e){ $("srcAdminStatus").textContent = e.message.startsWith("409") ? "That source already exists for this site." : "Add failed ("+e.message+")"; }
 }
 async function delSource(id){
   try{
@@ -726,6 +730,25 @@ async function discoverScales(){
   SCALES = keep;
 }
 
+// 15-min rolling yield: product Δtotal ÷ feed Δtotal over the last 15 min (from the
+// live readings totalizers). Throttled to ~30s — plenty for a 15-min window.
+let Y15_LAST=0;
+async function refreshYield15(){
+  const el=$("pY15"); if(!el) return;
+  if(Date.now()-Y15_LAST < 25000) return;
+  Y15_LAST=Date.now();
+  const feeds=SCALES.filter(s=>s.role==="feed"), prods=SCALES.filter(s=>s.role==="product");
+  if(!feeds.length){ el.textContent="--"; return; }
+  const since=new Date(Date.now()-15*60*1000).toISOString();
+  const openTot=async s=>{ try{ const r=await sb(`readings?select=total&device=eq.${encodeURIComponent(s.device)}&ts=gte.${since}&order=ts.asc&limit=1`); return (r[0]&&r[0].total!=null)?Number(r[0].total):null; }catch(e){ return null; } };
+  const closeTot=s=> (state[s.device] && state[s.device].total!=null) ? Number(state[s.device].total) : null;
+  const delta=async arr=>{ const opens=await Promise.all(arr.map(openTot)); let sum=0, ok=false;
+    arr.forEach((s,i)=>{ const o=opens[i], c=closeTot(s); if(o!=null&&c!=null&&c>=o){ sum+=(c-o); ok=true; } });
+    return ok?sum:null; };
+  const fD=await delta(feeds), pD=await delta(prods);
+  el.textContent = (fD!=null && fD>0 && pD!=null) ? fmt(pD/fD*100,1)+"%" : "--";
+}
+
 async function refreshScales(){
   await Promise.all(SCALES.map(async s=>{
     try{ const rows=await sb(`readings?select=rate,speed,total,weight,stable,ts&device=eq.${s.device}&order=ts.desc&limit=1`);
@@ -746,6 +769,7 @@ async function refreshScales(){
   const feed = SCALES.filter(s=>s.role==="feed").reduce((a,s)=>a+nz(state[s.device]?.rate),0);
   const prod = SCALES.filter(s=>s.role==="product").reduce((a,s)=>a+nz(state[s.device]?.rate),0);
   $("pFeed").textContent = fmt(feed);   // live rate (from readings)
+  refreshYield15();                      // 15-min rolling yield beside the feed number
   // Yield tiles are set from the permanent hourly ledger in refreshPlantHourly()
   $("plantScales").innerHTML = SCALES.filter(s=>s.role!=="weighbridge"&&s.role!=="gateway").map(scaleCardHTML).join("");
   $("allScales").innerHTML = SCALES.filter(s=>s.role!=="gateway").map(scaleCardHTML).join("");
