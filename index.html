@@ -148,6 +148,22 @@ th{color:var(--muted);font-size:10px;font-weight:700;letter-spacing:.8px;text-tr
 .pill-o{color:var(--amber);border-color:rgba(244,183,64,.3)}
 .empty{text-align:center;padding:28px;color:var(--muted)}
 
+/* ── coal source ─────────────────────────────────────────── */
+.src-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  background:var(--card);border:1px solid var(--line);border-left:3px solid var(--gold);
+  border-radius:12px;padding:11px 13px;margin-bottom:14px;cursor:pointer}
+.src-bar:active{border-color:var(--blue)}
+.src-cap{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted)}
+.src-name{font-size:17px;font-weight:800;line-height:1.25;margin-top:3px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.src-name.none{font-size:14px;font-weight:600;color:var(--muted)}
+.src-meta{font-size:11px;color:var(--muted);margin-top:3px}
+.src-set{flex:none;background:none;border:1px solid var(--line);color:var(--soft);
+  border-radius:8px;padding:8px 13px;font-size:12px;font-weight:700;font-family:inherit;cursor:pointer}
+.chip{background:var(--card);border:1px solid var(--line);color:var(--soft);border-radius:20px;
+  padding:7px 13px;font-size:12px;margin:0 6px 6px 0;font-family:inherit;cursor:pointer}
+.chip:active{border-color:var(--blue);color:var(--ink)}
+
 /* ── hourly modal ────────────────────────────────────────── */
 .veil{position:fixed;inset:0;background:rgba(4,7,12,.8);z-index:200;
   display:none;align-items:flex-end;padding:0}
@@ -246,11 +262,12 @@ input{width:100%}
         <div class="pht-row"><span>Disc</span><b id="tDiscHr">--</b><b id="tDiscPr">--</b></div>
       </div>
     </div>
+    <div id="srcBars"></div>
     <div class="eyebrow">Live scales</div>
     <div class="scale-grid" id="plantScales"></div>
     <div style="display:flex;justify-content:space-between;align-items:center"><div class="eyebrow" style="margin:0">Plant hourly</div><button onclick="exportPlantCSV()" style="background:none;border:1px solid #334;color:#9fb2c4;border-radius:7px;padding:5px 10px;font-size:11px">Export CSV</button></div>
-    <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Hour</th><th>Shift</th><th>Feed t</th><th>Prod t</th><th>Yield %</th></tr></thead>
-    <tbody id="plantHourly"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody></table></div>
+    <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Hour</th><th>Shift</th><th>Source</th><th>Feed t</th><th>Prod t</th><th>Yield %</th></tr></thead>
+    <tbody id="plantHourly"><tr><td colspan="7" class="empty">Loading…</td></tr></tbody></table></div>
     <div class="status-bar" id="plantStatus"></div>
   </div>
 
@@ -272,6 +289,7 @@ input{width:100%}
     <div class="filter-row">
       <select id="rType" style="flex:1" onchange="toggleWbFilters()">
         <option value="belt">Belt scales</option>
+        <option value="src">Feed by source</option>
         <option value="wb">Weighbridge</option>
       </select>
     </div>
@@ -382,6 +400,9 @@ const $  = id => document.getElementById(id);
 const nz = v => (v==null||isNaN(Number(v))) ? 0 : Number(v);
 const fmt = (v,d=1) => nz(v).toLocaleString(undefined,{minimumFractionDigits:d,maximumFractionDigits:d});
 const hhmm = s => s ? new Date(s).toLocaleString([],{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}) : '—';
+const tOnly = s => s ? new Date(s).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '--';
+// operator-typed text goes into innerHTML — escape it
+const esc = s => String(s==null?"":s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
 async function sb(q){
   const r = await fetch(SB_URL+"/rest/v1/"+q,{headers:authHeaders()});
@@ -409,6 +430,15 @@ async function sbPatch(path, body){
     body: JSON.stringify(body)
   });
   if(!r.ok) throw new Error(r.status);
+}
+
+async function sbPost(path, body){
+  const r = await fetch(SB_URL+"/rest/v1/"+path, {
+    method:"POST",
+    headers:{...authHeaders(), "Content-Type":"application/json", "Prefer":"return=minimal"},
+    body: JSON.stringify(body)
+  });
+  if(!r.ok){ let m=""; try{ m=(await r.json()).message||""; }catch(e){} throw new Error(m||r.status); }
 }
 
 async function loadTimeStudy(){
@@ -636,6 +666,9 @@ async function refreshScales(){
     $("wbStatus").style.color = wb.stable?"var(--green)":"var(--amber)";
   }
 
+  // coal source bar (one per site that has belt scales)
+  try{ await refreshSources(); renderSourceBars(); }catch(e){}
+
   // hourly plant table
   try{ await refreshPlantHourly(); }catch(e){}
 
@@ -649,7 +682,7 @@ async function refreshScales(){
 
 async function refreshPlantHourly(){
   const belts=SCALES.filter(s=>["feed","product","discard"].includes(s.role));
-  if(!belts.length){ $("plantHourly").innerHTML='<tr><td colspan="6" class="empty">Assign a Feed / Product scale in Admin</td></tr>'; return; }
+  if(!belts.length){ $("plantHourly").innerHTML='<tr><td colspan="7" class="empty">Assign a Feed / Product scale in Admin</td></tr>'; return; }
   const since=new Date(Date.now()-48*3600*1000).toISOString();
   const per={};
   await Promise.all(belts.map(async s=>{
@@ -657,16 +690,20 @@ async function refreshPlantHourly(){
     catch(e){ per[s.device]=[]; }
   }));
   const feeds=belts.filter(s=>s.role==="feed"), prods=belts.filter(s=>s.role==="product"), discs=belts.filter(s=>s.role==="discard");
+  const spanFrom=new Date(Date.now()-72*3600*1000); spanFrom.setMinutes(0,0,0);
+  const spans=await sourceSpans(spanFrom.toISOString(), null, 30000);
   const tAt=(dev,k)=>{ const h=per[dev]?.find(x=>new Date(x.hour).getTime()===k); return h?h.tons:0; };
   const hours=[...new Set(belts.flatMap(s=>(per[s.device]||[]).map(h=>new Date(h.hour).getTime())))].sort();
-  PLANT_HOURS = { hours, per, feeds, prods };   // cached for CSV export
-  if(!hours.length){ $("plantHourly").innerHTML='<tr><td colspan="6" class="empty">No hourly data yet (logs every 15 min)</td></tr>'; }
+  PLANT_HOURS = { hours, per, feeds, prods, spans };   // cached for CSV export
+  if(!hours.length){ $("plantHourly").innerHTML='<tr><td colspan="7" class="empty">No hourly data yet (logs every 15 min)</td></tr>'; }
   else $("plantHourly").innerHTML=hours.slice(-24).reverse().map(k=>{
     const f=feeds.reduce((a,s)=>a+tAt(s.device,k),0);
     const p=prods.reduce((a,s)=>a+tAt(s.device,k),0);
     const y=f>0?p/f*100:0; const si=shiftInfo(new Date(k));
+    const src=sourceAtHour(spans,k);
     return `<tr><td>${dLabel(k)}</td><td>${hLabel(new Date(k))}</td>
       <td><span class="pill ${si.name==='Day'?'pill-d':'pill-o'}">${si.name}</span></td>
+      <td${src&&src.mixed?` title="${esc(src.all.join(' → '))}"`:''}>${src?esc(src.name)+(src.mixed?' <span style="color:var(--muted)">+</span>':''):'<span style="color:var(--muted)">—</span>'}</td>
       <td class="num" style="font-weight:700">${fmt(f,1)}</td>
       <td class="num">${p?fmt(p,1):'--'}</td>
       <td class="num" style="color:${y>=60?'var(--green)':'var(--amber)'}">${f>0?fmt(y,1):'--'}</td></tr>`;
@@ -694,6 +731,284 @@ async function refreshPlantHourly(){
   setT("tDiscHr",dHr); setT("tDiscPr",dPr);
 }
 
+
+// ════════════════════════════════════════════════════════════
+//  COAL SOURCE — what the plant is washing (belt / plant side)
+//  source_log holds one OPEN row per site (ended_at is null).
+//  Setting a new source inserts a row; a DB trigger closes the
+//  previous one, so the operator only ever does one thing.
+//  Feed tonnes are then allocated to whichever source was active.
+// ════════════════════════════════════════════════════════════
+const HR = 3600000;
+let SOURCE_NOW = {};     // site -> currently open source_log row
+let SRC_RECENT = [];     // names offered as chips in the drawer
+let CUR_USER   = null;   // login name, stamped onto each change
+
+function beltSites(){
+  return [...new Set(SCALES.filter(s=>["feed","product","discard"].includes(s.role))
+                           .map(s=>s.site).filter(s=>s && s!=="Unassigned"))];
+}
+function durStr(ms){
+  if(!(ms>0)) return "";
+  const m=Math.round(ms/60000), h=Math.floor(m/60);
+  return h ? h+"h "+String(m%60).padStart(2,"0")+"m" : m+"m";
+}
+function encSite(s){ return encodeURIComponent(s).replace(/'/g,"%27"); }
+
+// Totaliser reading on every belt at this site, right now. Stored with the
+// change so a source's tonnage can later be read as an exact totaliser
+// difference instead of being split out of an hourly bucket.
+function snapshotTotals(site){
+  const o={};
+  SCALES.filter(s=>["feed","product","discard"].includes(s.role) && s.site===site).forEach(s=>{
+    const r=state[s.device];
+    if(r && r.total!=null && isOnline(r,s)) o[s.device]=Number(r.total);
+  });
+  return Object.keys(o).length ? o : null;
+}
+
+async function refreshSources(){
+  try{
+    const rows=await sb("source_log?select=*&ended_at=is.null&order=started_at.desc");
+    SOURCE_NOW={};
+    for(const r of rows) if(!SOURCE_NOW[r.site]) SOURCE_NOW[r.site]=r;
+  }catch(e){ /* table not created yet — the bar just reads "No source set" */ }
+}
+
+function renderSourceBars(){
+  const el=$("srcBars"); if(!el) return;
+  const sites=beltSites();
+  if(!sites.length){ el.innerHTML=""; return; }
+  el.innerHTML=sites.map(site=>{
+    const r=SOURCE_NOW[site];
+    const meta = r ? `since ${tOnly(r.started_at)} · ${durStr(Date.now()-new Date(r.started_at).getTime())}`
+                   : "feed tonnes stay unallocated until you set one";
+    return `<div class="src-bar" onclick="openSourceDrawer('${encSite(site)}')">
+      <div style="min-width:0">
+        <div class="src-cap">Coal source${sites.length>1?" · "+esc(site):""}</div>
+        <div class="src-name${r?"":" none"}">${r?esc(r.source):"No source set"}</div>
+        <div class="src-meta">${meta}</div>
+      </div>
+      <button class="src-set">${r?"Change":"Set"}</button>
+    </div>`;
+  }).join("");
+}
+
+function pickSource(i){ const el=$("srcInput"); if(el && SRC_RECENT[i]!=null){ el.value=SRC_RECENT[i]; el.focus(); } }
+
+async function openSourceDrawer(enc){
+  const site=decodeURIComponent(enc), cur=SOURCE_NOW[site];
+  SRC_RECENT=[];
+  try{
+    const rows=await sb(`source_log?select=source,started_at&site=eq.${encodeURIComponent(site)}&order=started_at.desc&limit=80`);
+    const seen=new Set();
+    for(const r of rows){
+      const n=(r.source||"").trim(), k=n.toLowerCase();
+      if(n && !seen.has(k)){ seen.add(k); SRC_RECENT.push(n); }
+    }
+    SRC_RECENT=SRC_RECENT.slice(0,10);
+  }catch(e){}
+  const now=new Date();
+  const hm=d=>String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0");
+  openDrawer(`
+    <h3>Coal source — ${esc(site)}</h3>
+    <div class="sub">${cur ? `Washing <b style="color:var(--ink)">${esc(cur.source)}</b> since ${tOnly(cur.started_at)}`
+                           : "Nothing logged yet for this site."}</div>
+    <div class="src-cap">Source being washed</div>
+    <input id="srcInput" placeholder="e.g. Seam 4 stockpile" autocapitalize="words"
+           autocomplete="off" spellcheck="false" style="margin:6px 0 14px">
+    ${SRC_RECENT.length ? `<div class="src-cap" style="margin-bottom:7px">Used before</div>
+      <div style="margin-bottom:16px">${SRC_RECENT.map((n,i)=>`<button class="chip" onclick="pickSource(${i})">${esc(n)}</button>`).join("")}</div>` : ""}
+    <div class="src-cap">Started at</div>
+    <input id="srcTime" type="time" value="${hm(now)}" style="margin:6px 0 18px">
+    <div style="display:flex;gap:8px">
+      <button onclick="setSource('${enc}')" style="flex:1;padding:12px;border:0;border-radius:9px;background:#2183C2;color:#fff;font-size:14px;font-weight:800;font-family:inherit">Set source</button>
+      ${cur?`<button onclick="endSource('${enc}')" style="padding:12px 16px;border:1px solid var(--line);border-radius:9px;background:none;color:var(--soft);font-size:14px;font-family:inherit">Stop</button>`:""}
+    </div>
+    <div id="srcErr" style="font-size:12px;color:var(--amber);min-height:18px;margin-top:12px"></div>`);
+}
+
+async function setSource(enc){
+  const site=decodeURIComponent(enc), err=$("srcErr");
+  const val=($("srcInput").value||"").trim().replace(/\s+/g," ");
+  if(!val){ err.textContent="Type the source, or tap one you've used before."; return; }
+  const cur=SOURCE_NOW[site];
+  if(cur && cur.source.trim().toLowerCase()===val.toLowerCase()){ closeDrawer(); return; }
+  const [hh,mm]=($("srcTime").value||"").split(":").map(Number);
+  const start=new Date();
+  if(isFinite(hh)){
+    start.setHours(hh, isFinite(mm)?mm:0, 0, 0);
+    // a time that hasn't happened yet means last night
+    if(start.getTime() > Date.now()+60000) start.setDate(start.getDate()-1);
+  }
+  if(cur && start.getTime() <= new Date(cur.started_at).getTime()){
+    err.textContent=`Start must be after ${tOnly(cur.started_at)}, when ${cur.source} started.`; return;
+  }
+  err.textContent="Saving…";
+  try{
+    await sbPost("source_log", { site, source:val, started_at:start.toISOString(),
+                                 set_by:CUR_USER, totals:snapshotTotals(site) });
+    SPAN_CACHE={key:null,at:0,rows:[]};
+    closeDrawer(); await refreshSources(); renderSourceBars();
+  }catch(e){ err.textContent="Could not save — "+e.message; }
+}
+
+async function endSource(enc){
+  const site=decodeURIComponent(enc), cur=SOURCE_NOW[site];
+  if(!cur){ closeDrawer(); return; }
+  try{
+    await sbPatch(`source_log?id=eq.${cur.id}`, { ended_at:new Date().toISOString(),
+                                                  totals_end:snapshotTotals(site) });
+    SPAN_CACHE={key:null,at:0,rows:[]};
+    closeDrawer(); await refreshSources(); renderSourceBars();
+  }catch(e){ const el=$("srcErr"); if(el) el.textContent="Could not stop — "+e.message; }
+}
+
+// ── allocating belt tonnes to a source ───────────────────────
+// Best case: the totaliser snapshots taken when the source was set and when it
+// was switched — exact, nothing assumed. Otherwise each hour of the permanent
+// `hourly` ledger is split by how many of its minutes the source was active,
+// so switch on the hour where the plant lets you and the two agree exactly.
+function spanEndMs(sp){ return sp.ended_at ? new Date(sp.ended_at).getTime() : Date.now(); }
+
+let SPAN_CACHE={key:null,at:0,rows:[]};
+async function sourceSpans(fromISO, toISO, ttl){
+  const key=fromISO+"|"+(toISO||"");
+  if(ttl && SPAN_CACHE.key===key && Date.now()-SPAN_CACHE.at < ttl) return SPAN_CACHE.rows;
+  let q=`source_log?select=*&or=(ended_at.is.null,ended_at.gte.${fromISO})&order=started_at.asc`;
+  if(toISO) q+=`&started_at=lte.${toISO}`;
+  let rows=[];
+  try{ rows=await sb(q); }catch(e){ return []; }
+  const sites=beltSites();
+  const out = sites.length ? rows.filter(sp=>sites.includes(sp.site)) : rows;
+  if(ttl) SPAN_CACHE={key, at:Date.now(), rows:out};
+  return out;
+}
+
+function proRataTons(hourRows, c0, c1){
+  let t=0;
+  for(const h of (hourRows||[])){
+    const h0=new Date(h.hour).getTime();
+    const ov=Math.min(h0+HR,c1)-Math.max(h0,c0);
+    if(ov>0) t += nz(h.tons) * (ov/HR);
+  }
+  return t;
+}
+
+function sourceAtHour(spans,k){
+  const acc={}, seq=[];                    // seq stays in clock order for the tooltip
+  for(const sp of (spans||[])){
+    const ov=Math.min(k+HR, spanEndMs(sp)) - Math.max(k, new Date(sp.started_at).getTime());
+    if(ov>0){ if(acc[sp.source]==null){ acc[sp.source]=0; seq.push(sp.source); } acc[sp.source]+=ov; }
+  }
+  if(!seq.length) return null;
+  const name=seq.slice().sort((a,b)=>acc[b]-acc[a])[0];   // the hour belongs to whoever held most of it
+  return {name, mixed:seq.length>1, all:seq};
+}
+
+async function genSource(from,to){
+  const belts=SCALES.filter(s=>["feed","product","discard"].includes(s.role));
+  if(!belts.length){ $("rptBody").innerHTML='<div class="empty">No belt scales assigned. Set roles in Admin.</div>'; return; }
+  const fISO=from.toISOString(), tISO=to.toISOString();
+  const spans=await sourceSpans(fISO, tISO);
+  if(!spans.length){
+    $("rptChart").innerHTML='';
+    $("rptBody").innerHTML='<div class="empty">No source logged in this range. Set one on the Plant tab and it starts counting from there.</div>';
+    $("rptStatus").textContent=""; REPORT=null; return;
+  }
+  const per={};
+  await Promise.all(belts.map(async s=>{
+    try{ per[s.device]=await sb(`hourly?select=hour,tons&device=eq.${encodeURIComponent(s.device)}&hour=gte.${fISO}&hour=lte.${tISO}&order=hour.asc`); }
+    catch(e){ per[s.device]=[]; }
+  }));
+  const feeds=belts.filter(s=>s.role==="feed"), prods=belts.filter(s=>s.role==="product"), discs=belts.filter(s=>s.role==="discard");
+  const winF=from.getTime(), winT=to.getTime();
+
+  const stints=spans.map(sp=>{
+    const s0=new Date(sp.started_at).getTime(), s1=spanEndMs(sp);
+    const c0=Math.max(s0,winF), c1=Math.min(s1,winT);
+    const whole = s0>=winF && s1<=winT;      // snapshots only valid for a run fully inside the window
+    let exact=0; const tons={};
+    belts.forEach(b=>{
+      let t=null;
+      if(whole && sp.totals && sp.totals_end){
+        const a=sp.totals[b.device], z=sp.totals_end[b.device];
+        if(a!=null && z!=null){ const d=Number(z)-Number(a); if(isFinite(d) && d>=0){ t=d; exact++; } }
+      }
+      tons[b.device] = (t==null) ? proRataTons(per[b.device], c0, c1) : t;
+    });
+    const sum=arr=>arr.reduce((a,b)=>a+nz(tons[b.device]),0);
+    return { site:sp.site, source:(sp.source||"").trim(), key:(sp.source||"").trim().toLowerCase(),
+             start:c0, end:c1, live:!sp.ended_at, hours:Math.max(0,c1-c0)/HR,
+             feed:sum(feeds), product:sum(prods), discard:sum(discs),
+             basis: exact===0 ? "time split" : (exact===belts.length ? "totaliser" : "mixed") };
+  }).filter(x=>x.hours>0);
+
+  const by={};
+  stints.forEach(s=>{
+    const g = by[s.key] || (by[s.key]={source:s.source, spell:{}, hours:0, feed:0, product:0, discard:0,
+                                       runs:0, exact:0, first:s.start, last:s.end});
+    g.spell[s.source]=(g.spell[s.source]||0)+1;   // free text: show the spelling used most often
+    g.hours+=s.hours; g.feed+=s.feed; g.product+=s.product; g.discard+=s.discard;
+    g.runs++; if(s.basis==="totaliser") g.exact++;
+    g.first=Math.min(g.first,s.start); g.last=Math.max(g.last,s.end);
+  });
+  Object.values(by).forEach(g=>{
+    g.source=Object.entries(g.spell).sort((a,b)=>b[1]-a[1])[0][0];
+    delete g.spell;
+  });
+  const bySource=Object.values(by).sort((a,b)=>b.feed-a.feed);
+
+  const feedTotal=feeds.reduce((a,s)=>a+(per[s.device]||[]).reduce((x,h)=>x+nz(h.tons),0),0);
+  const feedAlloc=bySource.reduce((a,g)=>a+g.feed,0);
+  const unalloc=feedTotal-feedAlloc;
+  REPORT={type:"src", bySource, stints, unalloc, feedTotal};
+
+  $("rptChart").innerHTML=sourceChart(bySource);
+  const rows=bySource.map(g=>{
+    const y=g.feed>0?g.product/g.feed*100:0;
+    return `<tr><td>${esc(g.source)}</td>
+      <td class="num" style="font-weight:700">${fmt(g.feed,1)}</td>
+      <td class="num">${g.product?fmt(g.product,1):'--'}</td>
+      <td class="num" style="color:${y>=60?'var(--green)':'var(--amber)'}">${g.product?fmt(y,1):'--'}</td>
+      <td class="num">${fmt(g.hours,1)}</td>
+      <td><span class="pill ${g.exact===g.runs?'pill-r':'pill-o'}">${g.exact===g.runs?'totaliser':'split'}</span></td></tr>`;
+  }).join("");
+  const unallocRow = unalloc>0.1
+    ? `<tr><td style="color:var(--muted)">No source set</td>
+        <td class="num" style="color:var(--muted)">${fmt(unalloc,1)}</td>
+        <td>--</td><td>--</td><td>--</td><td></td></tr>` : "";
+  const stintRows=stints.slice().reverse().map(s=>`<tr>
+      <td>${esc(s.source)}</td>
+      <td>${dLabel(s.start)} ${tOnly(s.start)}</td>
+      <td>${s.live?'<span class="pill pill-r">running</span>':dLabel(s.end)+' '+tOnly(s.end)}</td>
+      <td class="num">${fmt(s.hours,1)}</td>
+      <td class="num" style="font-weight:700">${fmt(s.feed,1)}</td></tr>`).join("");
+  $("rptBody").innerHTML=`
+    <div class="eyebrow">Tonnes by source</div>
+    <div class="tbl-wrap"><table><thead><tr><th>Source</th><th>Feed t</th><th>Prod t</th><th>Yield %</th><th>Hrs</th><th>Basis</th></tr></thead>
+    <tbody>${rows}${unallocRow}</tbody></table></div>
+    <div class="eyebrow" style="margin-top:16px">Each run</div>
+    <div class="tbl-wrap"><table><thead><tr><th>Source</th><th>From</th><th>To</th><th>Hrs</th><th>Feed t</th></tr></thead>
+    <tbody>${stintRows}</tbody></table></div>`;
+  $("rptStatus").textContent=`${bySource.length} source(s) · ${stints.length} run(s) · ${fmt(feedAlloc,1)} t of ${fmt(feedTotal,1)} t feed allocated`;
+}
+
+function sourceChart(list){
+  if(!list.length) return '';
+  const H=170, pad=24, barW=30, step=barW+22, W=Math.max(300, list.length*step+pad*2);
+  const max=Math.max(1,...list.map(g=>g.feed));
+  let bars='';
+  list.forEach((g,i)=>{
+    const x=pad+i*step, fh=(g.feed/max)*(H-pad*2-10);
+    bars+=`<rect x="${x}" y="${H-pad-fh}" width="${barW}" height="${fh}" fill="#37c98a" rx="2"></rect>`;
+    bars+=`<text x="${x+barW/2}" y="${H-pad-fh-5}" font-size="9" fill="#9db5cc" text-anchor="middle">${fmt(g.feed,0)}</text>`;
+    bars+=`<text x="${x+barW/2}" y="${H-8}" font-size="9" fill="#8aa0b4" text-anchor="middle">${esc(String(g.source).slice(0,11))}</text>`;
+  });
+  return `<div style="overflow-x:auto"><svg width="${W}" height="${H}" style="background:#111722;border:1px solid #26313d;border-radius:10px">${bars}</svg></div>
+    <div style="font-size:11px;color:var(--muted);margin-top:4px">Feed tonnes per source</div>`;
+}
+
 let PLANT_HOURS = null;
 function csvDownload(name, rows){
   const csv = rows.map(r=>r.map(c=>{ const v=(c==null?"":String(c)); return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; }).join(",")).join("\n");
@@ -702,12 +1017,13 @@ function csvDownload(name, rows){
 }
 function exportPlantCSV(){
   if(!PLANT_HOURS||!PLANT_HOURS.hours.length){ alert("No hourly data to export yet."); return; }
-  const {hours,per,feeds,prods}=PLANT_HOURS;
+  const {hours,per,feeds,prods,spans}=PLANT_HOURS;
   const tAt=(dev,k)=>{ const h=per[dev]?.find(x=>new Date(x.hour).getTime()===k); return h?h.tons:0; };
-  const rows=[["Date","Hour","Shift","Feed t","Product t","Yield %"]];
+  const rows=[["Date","Hour","Shift","Source","Feed t","Product t","Yield %"]];
   hours.forEach(k=>{ const f=feeds.reduce((a,s)=>a+tAt(s.device,k),0), p=prods.reduce((a,s)=>a+tAt(s.device,k),0);
     const y=f>0?(p/f*100).toFixed(1):""; const si=shiftInfo(new Date(k));
-    rows.push([dLabel(k), hLabel(new Date(k)), si.name, f.toFixed(1), p.toFixed(1), y]); });
+    const src=sourceAtHour(spans,k);
+    rows.push([dLabel(k), hLabel(new Date(k)), si.name, src?src.all.join(" → "):"", f.toFixed(1), p.toFixed(1), y]); });
   csvDownload("plant_hourly_"+new Date().toISOString().slice(0,10)+".csv", rows);
 }
 
@@ -769,7 +1085,9 @@ async function genReport(){
   const to=new Date($("rTo").value+"T23:59:59");
   if(isNaN(from)||isNaN(to)){ $("rptStatus").textContent="Pick a valid From and To date."; return; }
   $("rptBody").innerHTML='<div class="empty">Generating…</div>'; $("rptChart").innerHTML='';
-  return (type==="wb") ? genWeighbridge(from,to) : genBelt(from,to);
+  if(type==="wb")  return genWeighbridge(from,to);
+  if(type==="src") return genSource(from,to);
+  return genBelt(from,to);
 }
 
 async function genBelt(from,to){
@@ -848,6 +1166,14 @@ function exportReportCSV(){
     const rows=[["Date","Time In","Time Out","Ticket","Batch","Reg","Transporter","Customer","Supplier","Destination","Driver","Product","Net t","Tare kg"]];
     REPORT.rows.forEach(r=>rows.push([r.time_in?dLabel(new Date(r.time_in).getTime()):"", r.time_in?hLabel(new Date(r.time_in)):"", r.time_out?hLabel(new Date(r.time_out)):"", r.ticket||"", r.batch_no||"", r.reg||"", r.transporter||"", r.customer||"", r.supplier||"", r.destination||"", r.driver||"", r.product||"", r.net==null?"":r.net, r.empty_weight==null?"":r.empty_weight]));
     csvDownload("weighbridge_report.csv", rows);
+  } else if(REPORT.type==="src"){
+    const rows=[["Source","Feed t","Product t","Discard t","Yield %","Hours active","Runs","Basis","First","Last"]];
+    REPORT.bySource.forEach(g=>rows.push([g.source, g.feed.toFixed(1), g.product.toFixed(1), g.discard.toFixed(1),
+      g.feed>0?(g.product/g.feed*100).toFixed(1):"", g.hours.toFixed(1), g.runs,
+      g.exact===g.runs?"totaliser":"time split",
+      dLabel(g.first)+" "+tOnly(g.first), dLabel(g.last)+" "+tOnly(g.last)]));
+    if(REPORT.unalloc>0.1) rows.push(["(no source set)", REPORT.unalloc.toFixed(1)]);
+    csvDownload("plant_by_source.csv", rows);
   } else {
     const rows=[["Date","Feed t","Product t","Yield %"]];
     REPORT.combined.forEach(d=>rows.push([dLabel(d.day), d.feed.toFixed(1), d.product.toFixed(1), d.feed>0?d.yield.toFixed(1):""]));
@@ -955,6 +1281,22 @@ function exportXLSX(){
     ws['!cols']=HEAD.map((h,i)=>({wch: [10,13,12,18,12,11,8,12,16,15,11,13,8,17,13,15,11,11,16,9,11,14,13][i]||12}));
     XLSX.utils.book_append_sheet(wb, ws, safeSheet("REPORT Records-"+from+"_"+to));
     XLSX.writeFile(wb, "REPORT Records-"+from+"_"+to+".xlsx");
+  } else if(REPORT.type==="src"){
+    const a=[["Source","Feed t","Product t","Discard t","Yield %","Hours active","Runs","Basis"]];
+    REPORT.bySource.forEach(g=>a.push([g.source, +g.feed.toFixed(1), +g.product.toFixed(1), +g.discard.toFixed(1),
+      g.feed>0?+(g.product/g.feed*100).toFixed(1):"", +g.hours.toFixed(1), g.runs,
+      g.exact===g.runs?"totaliser":"time split"]));
+    if(REPORT.unalloc>0.1) a.push(["(no source set)", +REPORT.unalloc.toFixed(1)]);
+    a.push([]); a.push(["Feed logged in range", +REPORT.feedTotal.toFixed(1)]);
+    const ws1=XLSX.utils.aoa_to_sheet(a); ws1['!cols']=[{wch:26},{wch:10},{wch:11},{wch:11},{wch:9},{wch:13},{wch:7},{wch:12}];
+    XLSX.utils.book_append_sheet(wb, ws1, "By source");
+    const b=[["Source","Site","From","To","Hours","Feed t","Product t","Discard t","Basis"]];
+    REPORT.stints.forEach(s=>b.push([s.source, s.site, new Date(s.start).toLocaleString('en-GB'),
+      s.live?"(running)":new Date(s.end).toLocaleString('en-GB'), +s.hours.toFixed(2),
+      +s.feed.toFixed(1), +s.product.toFixed(1), +s.discard.toFixed(1), s.basis]));
+    const ws2=XLSX.utils.aoa_to_sheet(b); ws2['!cols']=[{wch:26},{wch:12},{wch:18},{wch:18},{wch:8},{wch:10},{wch:11},{wch:11},{wch:11}];
+    XLSX.utils.book_append_sheet(wb, ws2, "Runs");
+    XLSX.writeFile(wb, "ISS_Plant_By_Source.xlsx");
   } else {
     REPORT.belts.forEach(s=>{
       const aoa=[["Date","Hour","Shift","Opening t","Closing t","Tons"]];
@@ -1116,6 +1458,7 @@ function showLogin(msg){
 }
 async function startApp(session){
   ACCESS_TOKEN = session.access_token;
+  CUR_USER = (session.user && session.user.email) ? session.user.email.split("@")[0] : null;
   const o=$("loginOverlay"); if(o) o.style.display="none";
   const sh=$("shell"); if(sh) sh.style.display="";
   try{
