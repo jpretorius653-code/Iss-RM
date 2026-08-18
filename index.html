@@ -933,7 +933,7 @@ async function genBelt(from,to){
   const activeSrc=(site,ts)=>{ for(const e of slog){ const es=e.site||""; if((es===(site||"")||es==="") && new Date(e.started_at).getTime()<=ts) return e; } return null; };
   const bySrc={};
   const allocSrc=(s,role)=>{ (per[s.device]||[]).forEach(h=>{
-      const a=activeSrc(s.site, new Date(h.hour).getTime());
+      const a=activeSrc(s.site, new Date(h.hour).getTime()+1800000); // credit the hour to the source active at its midpoint
       const key = a ? (a.source+"|"+(a.rd!=null?Number(a.rd).toFixed(2):"")) : "Unassigned|";
       const o = bySrc[key] || (bySrc[key]={source:a?a.source:"Unassigned", rd:a?a.rd:null, feed:0, product:0, discard:0});
       o[role]+=(h.tons||0);
@@ -943,6 +943,7 @@ async function genBelt(from,to){
   const srcRows=Object.values(bySrc).map(o=>({...o, ...yields(o)})).sort((a,b)=>b.feed-a.feed);
   const pctCell=(v,ok)=>`<td class="num">${ok?fmt(v,1)+'%':'--'}</td>`;
   const srcTbl = srcRows.length ? `<div class="eyebrow" style="margin-top:14px">By source</div>
+    <div style="font-size:11px;color:var(--muted);margin:-2px 0 6px">Each hour is credited to the source set for it. Hours before any source was set show as “Unassigned”.</div>
     <div class="tbl-wrap"><table><thead><tr><th>Source</th><th>RD</th><th>Feed t</th><th>Product %</th><th>Discard %</th><th>Slurry/spiral %</th></tr></thead>
     <tbody>${srcRows.map(o=>`<tr><td>${(o.source||'').replace(/</g,'&lt;')}</td><td class="num">${o.rd!=null?Number(o.rd).toFixed(2):'--'}</td>
       <td class="num" style="font-weight:700">${fmt(o.feed,1)}</td>${pctCell(o.prodY,o.feed>0)}${pctCell(o.discY,o.feed>0)}${pctCell(o.slurY,o.feed>0)}</tr>`).join("")}</tbody></table></div>` : "";
