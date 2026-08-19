@@ -68,6 +68,17 @@ html,body{height:100%;background:var(--bg);color:var(--ink);
 
 /* ── cards & tiles ───────────────────────────────────────── */
 .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px}
+.stat{background:linear-gradient(150deg,var(--card),#0e1622);border:1px solid var(--line);border-radius:14px;padding:14px 14px 12px;position:relative;overflow:hidden;flex:1;min-width:0}
+.stat::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:transparent}
+.stat.accent-cyan::before{background:var(--cyan)}
+.stat.accent-gold::before{background:var(--gold2)}
+.stat.accent-green::before{background:var(--green)}
+.stat.accent-amber::before{background:var(--amber)}
+.stat-n{font-size:24px;font-weight:900;line-height:1.05;font-variant-numeric:tabular-nums;color:var(--ink)}
+.stat-u{font-size:12px;font-weight:700;color:var(--muted);margin-left:1px}
+.stat-l{font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin-top:6px}
+.stat-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:12px}
+@media(min-width:560px){.stat-grid{grid-template-columns:repeat(4,1fr)}}
 .eyebrow{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--muted);margin-bottom:10px}
 .tiles{display:grid;gap:10px;margin-bottom:14px}
 .tiles-2{grid-template-columns:1fr 1fr}
@@ -341,7 +352,9 @@ input{width:100%}
 
   <!-- TRUCKS -->
   <div class="page" id="pg-trucks">
-    <div id="trucksToday" style="display:flex;gap:10px;margin-bottom:14px"></div>
+    <div class="eyebrow">Today</div>
+    <div id="trucksToday" class="stat-grid"></div>
+    <div id="trucksSplit" style="margin:-4px 0 16px;display:flex;gap:8px;flex-wrap:wrap"></div>
     <div class="eyebrow">On site now</div>
     <div id="trucksOnsite"><div class="empty">Loading…</div></div>
     <div class="eyebrow" style="margin-top:14px">Recent departures</div>
@@ -1145,6 +1158,8 @@ function exportXLSX(){
 }
 
 // ── trucks page ──────────────────────────────────────────────
+function durStr(m){ if(m==null||isNaN(m)) return "—"; m=Math.round(m); if(m<60) return m+"m"; return Math.floor(m/60)+"h "+String(m%60).padStart(2,'0')+"m"; }
+
 async function loadTrucks(){
   try{
     const onsite=await sb("transactions?select=*&status=eq.open&order=time_in.asc&limit=50");
@@ -1152,14 +1167,21 @@ async function loadTrucks(){
     renderTrucks(onsite,complete);
     // today's totals (completed tickets since local midnight)
     const start=new Date(); start.setHours(0,0,0,0);
-    const today=await sb(`transactions?select=net,time_out&status=eq.complete&time_out=gte.${encodeURIComponent(start.toISOString())}`);
+    const today=await sb(`transactions?select=net,action,time_in,time_out&status=eq.complete&time_out=gte.${encodeURIComponent(start.toISOString())}`);
     const trucksToday=today.length;
     const tonsToday=today.reduce((s,r)=>s+(parseFloat(r.net)||0),0);
+    const tas=today.filter(r=>r.time_in&&r.time_out).map(r=>(new Date(r.time_out)-new Date(r.time_in))/60000).filter(v=>v>=0);
+    const avgTa=tas.length ? tas.reduce((a,b)=>a+b,0)/tas.length : null;
+    const disp=today.filter(r=>/load/i.test(r.action||"")&&!/off/i.test(r.action||"")).length;
+    const recv=trucksToday-disp;
     const el=$("trucksToday");
     if(el) el.innerHTML=`
-      <div class="stat"><div class="stat-n num">${trucksToday}</div><div class="stat-l">Trucks today</div></div>
-      <div class="stat"><div class="stat-n num">${fmt(tonsToday,1)}</div><div class="stat-l">Tons moved today</div></div>
-      <div class="stat"><div class="stat-n num">${onsite.length}</div><div class="stat-l">On site now</div></div>`;
+      <div class="stat accent-cyan"><div class="stat-n num">${trucksToday}</div><div class="stat-l">Trucks today</div></div>
+      <div class="stat accent-gold"><div class="stat-n num">${fmt(tonsToday,1)}<span class="stat-u">t</span></div><div class="stat-l">Tons moved today</div></div>
+      <div class="stat accent-amber"><div class="stat-n num">${avgTa==null?'—':durStr(avgTa)}</div><div class="stat-l">Avg turnaround</div></div>
+      <div class="stat accent-green"><div class="stat-n num">${onsite.length}</div><div class="stat-l">On site now</div></div>`;
+    const sp=$("trucksSplit");
+    if(sp) sp.innerHTML = trucksToday ? `<span class="pill pill-d">▲ ${disp} dispatch</span><span class="pill pill-r">▼ ${recv} receive</span>` : "";
     $("trucksStatus").textContent=`Updated ${new Date().toLocaleTimeString()} · ${onsite.length} on site`;
   }catch(e){ $("trucksStatus").textContent="Connection error"; }
 }
@@ -1195,6 +1217,7 @@ function renderTrucks(onsite,recent){
         <span class="pill ${dispatch?"pill-d":"pill-r"}">${dispatch?"dispatch":"receive"}</span>
         <div style="font-size:16px;font-weight:900;margin-top:4px" class="num">${r.net!=null?fmt(r.net)+" t":"—"}</div>
         <div style="font-size:10px;color:var(--muted)">${hhmm(r.time_out)}</div>
+        ${r.time_in&&r.time_out?`<div style="font-size:10px;color:var(--soft)">⏱ ${durStr((new Date(r.time_out)-new Date(r.time_in))/60000)}</div>`:""}
       </div>
     </div>`;
   }).join("") : '<div class="empty">No recent transactions</div>';
