@@ -145,7 +145,7 @@ html,body{height:100%;background:var(--bg);color:var(--ink);
 .sc-unit{font-size:12px;color:var(--muted);font-weight:600}
 .sc-subs{display:flex;gap:12px;margin-top:8px;font-size:12px;color:var(--muted)}
 .sc-subs b{color:var(--ink)}
-.dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+.dot{width:8px;height:8px;border-aradius:50%;display:inline-block}
 .dot-on{background:var(--green);box-shadow:0 0 6px var(--green)}
 .dot-mo{background:var(--amber);animation:pulse .55s infinite alternate}
 .dot-off{background:var(--red)}
