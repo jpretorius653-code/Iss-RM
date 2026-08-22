@@ -189,6 +189,30 @@ th{color:var(--muted);font-size:10px;font-weight:700;letter-spacing:.8px;text-tr
 select,input{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px;font-family:inherit}
 input{width:100%}
 .filter-row{display:flex;gap:8px;margin-bottom:14px;align-items:center;flex-wrap:wrap}
+
+/* ── fleet ───────────────────────────────────────────────── */
+.fbtn{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:8px;
+  padding:8px 12px;font-size:12px;font-weight:700;font-family:inherit;cursor:pointer;white-space:nowrap}
+.fbtn:hover{border-color:#3a5a80}
+.fbtn.pri{background:#29ABE2;border-color:#29ABE2;color:#06131c}
+.fbtn.sm{padding:5px 9px;font-size:11px}
+.fbtn.dngr{color:#ff8a7a;border-color:#5a3330}
+.fbtn[disabled]{opacity:.5;cursor:default}
+.f-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}
+.f-lbl{font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin-bottom:3px}
+.f-tbl{width:100%;border-collapse:collapse;font-size:12px}
+.f-tbl th{text-align:left;font-size:10px;letter-spacing:.8px;text-transform:uppercase;color:var(--muted);
+  padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+.f-tbl td{padding:7px 8px;border-bottom:1px solid rgba(255,255,255,.05);vertical-align:middle}
+.f-tbl tr:last-child td{border-bottom:0}
+.f-reg{font-family:ui-monospace,Menlo,monospace;font-weight:800;letter-spacing:.5px}
+.f-haul{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;cursor:pointer}
+.f-haul-n{font-size:14px;font-weight:800}
+.f-haul-s{font-size:11px;color:var(--muted);margin-top:2px}
+.f-note{font-size:11px;color:var(--muted);margin:6px 0 10px}
+.f-warn{background:#2a1f10;border:1px solid #5a4520;color:#f0c674;border-radius:10px;
+  padding:10px 12px;font-size:12px;margin-bottom:12px}
+.f-ok{background:#10241a;border:1px solid #235c3c;color:#7ee2a8}
 /* ── login overlay ── */
 #loginOverlay{position:fixed;inset:0;z-index:1000;display:none;align-items:center;justify-content:center;
   background:radial-gradient(1200px 800px at 50% -10%, #16324f 0%, #0a0c10 60%);padding:24px}
@@ -362,6 +386,55 @@ input{width:100%}
     <div class="status-bar" id="trucksStatus"></div>
   </div>
 
+  <div class="page" id="pg-fleet">
+    <div id="fleetGate"></div>
+    <div class="eyebrow">Add a truck</div>
+    <div class="f-note">Trucks added here appear on the weighbridge at the next sync. Registration is the only compulsory field.</div>
+    <div class="f-note" id="fSiteNote" style="margin-top:-4px"></div>
+    <div class="card">
+      <div class="f-grid">
+        <div><div class="f-lbl">Registration *</div><input id="fReg" placeholder="ABC 123 GP" autocapitalize="characters"/></div>
+        <div><div class="f-lbl">Transporter</div><input id="fTransporter" list="fHaulierOpts" placeholder="ABC Transport"/>
+          <datalist id="fHaulierOpts"></datalist></div>
+        <div><div class="f-lbl">Driver</div><input id="fDriver" placeholder="J Dlamini"/></div>
+        <div><div class="f-lbl">Trailer 1</div><input id="fTrl1" placeholder="TRL 456 GP" autocapitalize="characters"/></div>
+        <div><div class="f-lbl">Trailer 2</div><input id="fTrl2" placeholder="TRL 789 GP" autocapitalize="characters"/></div>
+        <div><div class="f-lbl">Tare (kg)</div><input id="fTare" inputmode="numeric" placeholder="14300"/></div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center">
+        <button class="fbtn pri" id="fSaveBtn" onclick="fleetSave()">Add truck</button>
+        <button class="fbtn" onclick="fleetClearForm()">Clear</button>
+        <span id="fEditNote" style="font-size:11px;color:var(--muted)"></span>
+      </div>
+    </div>
+
+    <div class="eyebrow">Bulk</div>
+    <div class="card">
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="fbtn" onclick="fleetTemplate()">Download template</button>
+        <button class="fbtn" onclick="document.getElementById('fFile').click()">Upload filled-in sheet</button>
+        <button class="fbtn" onclick="fleetExport()">Export current list</button>
+        <input type="file" id="fFile" style="display:none"
+          accept=".csv,.xlsx,.txt,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          onchange="fleetImport(this)"/>
+      </div>
+      <div class="f-note" style="margin:10px 0 0">The template has a header row and an instructions sheet. Fill it in on a laptop, mail it to yourself, and upload it from here — blank cells never wipe a detail already on record.</div>
+      <div id="fImportBox"></div>
+    </div>
+
+    <div class="eyebrow">Fleet</div>
+    <div class="filter-row">
+      <input id="fSearch" style="flex:2;min-width:160px" placeholder="Search reg, driver, transporter…" oninput="fleetRender()"/>
+      <select id="fView" style="flex:1;min-width:140px" onchange="fleetRender()">
+        <option value="haulier">By transporter</option>
+        <option value="flat">All trucks</option>
+      </select>
+      <select id="fSiteSel" style="flex:1;min-width:130px;display:none" onchange="FLEET_SITE=this.value;loadFleet()"></select>
+    </div>
+    <div id="fleetList"><div class="empty">Loading…</div></div>
+    <div class="status-bar" id="fleetStatus"></div>
+  </div>
+
   <div class="page" id="pg-time">
     <div class="eyebrow">Production time study — feed belt</div>
     <div style="font-size:12px;color:var(--muted);margin-bottom:10px">Running = belt moving + tonnage · Idle = moving, no tonnage · Standing = belt stopped. Last 24 h.</div>
@@ -394,6 +467,9 @@ input{width:100%}
   </button>
   <button class="tab" data-page="trucks" onclick="nav(this)">
     <svg viewBox="0 0 24 24"><rect x="1" y="10" width="14" height="10" rx="1"/><path d="M15 14h4l3 3v3h-7V14z"/><circle cx="5" cy="20" r="2"/><circle cx="19" cy="20" r="2"/></svg>Trucks
+  </button>
+  <button class="tab" data-page="fleet" onclick="nav(this)">
+    <svg viewBox="0 0 24 24"><path d="M4 7h10v8H4zM14 10h3l3 3v2h-6z"/><circle cx="7" cy="17" r="1.6"/><circle cx="18" cy="17" r="1.6"/></svg>Fleet
   </button>
   <button class="tab" data-page="time" onclick="nav(this)">
     <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Time
@@ -442,6 +518,471 @@ async function sb(q){
   return r.json();
 }
 
+// ════════════════════════════════════════════════════════════
+//  FLEET — the client maintains their own truck list from here
+//
+//  Writes go to public.fleet, keyed on (site, reg). The weighbridge
+//  app pulls the same rows down, so a truck added on a phone at the
+//  transporter's office reaches the bridge without a phone call.
+//
+//  Needs migration 06_fleet_orders_remote_write.sql: before that, a
+//  site login may only READ this table and every save comes back 403.
+//  fleetGate() says so in plain language instead of failing silently.
+// ════════════════════════════════════════════════════════════
+const DASH_BUILD="2026-08-22b";      // bump on every deploy
+try{ console.log("ISS Remote Monitor — build "+DASH_BUILD); }catch(e){}
+let FLEET=[], FLEET_SITE="", FLEET_EDIT=null, FLEET_PENDING=null, FLEET_RO=false;
+
+/* The site key used for FLEET rows only.
+   The rest of this dashboard carries site names as they were first typed —
+   "Hillside" with a capital H, while commvar and primecoal are lower case.
+   The weighbridge app forces its Site Code to lower case, so fleet and
+   orders are stored lower case on both sides. Everything else (readings,
+   transactions, scales) is left exactly as it is. */
+function fleetSite(){
+  const raw = FLEET_SITE || MY_SITE || plantSite() || "";
+  return String(raw).trim().toLowerCase();
+}
+function fleetSiteLabel(){
+  const raw = FLEET_SITE || MY_SITE || plantSite() || "";
+  return String(raw).trim();
+}
+function fNorm(v){ return String(v==null?"":v).trim().toUpperCase().replace(/\s+/g," "); }
+function fClean(v){ return String(v==null?"":v).trim(); }
+
+async function loadFleet(){
+  const site=fleetSite();
+  $("fleetStatus").textContent="Loading "+site+"…";
+  // admin gets a site picker; a client is locked to their own site
+  const sel=$("fSiteSel");
+  if(IS_ADMIN && sel){
+    const sites=[...new Set([...(ALL_SITES||[]), site]
+                  .filter(Boolean).map(x=>String(x).trim().toLowerCase()))].sort();
+    sel.innerHTML=sites.map(x=>`<option value="${x}" ${x===site?"selected":""}>${x}</option>`).join("");
+    sel.style.display="";
+  }
+  try{
+    FLEET = await sb("fleet?select=*&site=eq."+encodeURIComponent(site)+
+                     "&deleted=is.false&order=reg.asc");
+    FLEET_RO=false;
+  }catch(e){
+    if(String(e.message)==="404"){ fleetGate("missing"); return; }
+    FLEET=[]; $("fleetStatus").textContent="Could not load ("+e.message+")";
+    $("fleetList").innerHTML='<div class="empty">Could not load the fleet list.</div>';
+    return;
+  }
+  fleetGate("");
+  fleetRender();
+  // The site string written here must match the weighbridge app's Site Code
+  // exactly — "commvar" and "Commvar" are two different sites to Postgres, and
+  // a mismatch shows up as a fleet list that silently never arrives.
+  const note=$("fSiteNote");
+  if(note) note.innerHTML='Writing to site <b style="color:#29ABE2">'+esc(site)+
+    '</b> — always lower case, matching the Site Code in the weighbridge app.';
+  $("fleetStatus").textContent=FLEET.length+" truck"+(FLEET.length!==1?"s":"")+" · "+site+
+    "   ·   build "+DASH_BUILD;
+}
+
+function fleetGate(kind){
+  const el=$("fleetGate"); if(!el) return;
+  if(kind==="missing"){
+    el.innerHTML='<div class="f-warn"><b>The fleet table is not there yet.</b><br/>'+
+      'Run <code>05_orders_fleet.sql</code> then <code>06_fleet_orders_remote_write.sql</code> in the Supabase SQL editor.</div>';
+    $("fleetList").innerHTML='<div class="empty">Nothing to show until the table exists.</div>';
+    $("fleetStatus").textContent="";
+  } else if(kind==="readonly"){
+    el.innerHTML='<div class="f-warn"><b>This login may read the fleet list but not change it.</b><br/>'+
+      'Run <code>06_fleet_orders_remote_write.sql</code> — it is the migration that lets a site maintain its own trucks.</div>';
+  } else el.innerHTML="";
+}
+
+// ── list ─────────────────────────────────────────────────────
+function fleetGroups(list){
+  const NOH="— no transporter recorded —", idx={};
+  list.forEach(f=>{
+    const k=fClean(f.transporter)||NOH;
+    (idx[k]=idx[k]||{name:k,trucks:[],drivers:{}}).trucks.push(f);
+    const d=fClean(f.driver); if(d) idx[k].drivers[d]=1;
+  });
+  return Object.values(idx).sort((a,b)=>
+    a.name===NOH?1:b.name===NOH?-1:(b.trucks.length-a.trucks.length||a.name.localeCompare(b.name)));
+}
+let FLEET_OPEN={}, FLEET_GROUPS=[];
+function fleetToggle(i){
+  const g=FLEET_GROUPS[i]; if(!g) return;
+  FLEET_OPEN[g.name]=(FLEET_OPEN[g.name]===false);
+  fleetRender();
+}
+function fleetRender(){
+  const q=($("fSearch").value||"").toLowerCase();
+  const list=FLEET.filter(f=>!q||[f.reg,f.trailer1,f.trailer2,f.driver,f.transporter]
+                    .join(" ").toLowerCase().includes(q));
+  // keep the transporter suggestions current
+  const hs=[...new Set(FLEET.map(f=>fClean(f.transporter)).filter(Boolean))].sort();
+  $("fHaulierOpts").innerHTML=hs.map(h=>`<option value="${esc(h)}">`).join("");
+
+  if(!list.length){
+    $("fleetList").innerHTML='<div class="empty">'+
+      (FLEET.length?"No trucks match that search":"No trucks yet — add one above, or upload a filled-in template")+"</div>";
+    return;
+  }
+  if($("fView").value==="flat"){ $("fleetList").innerHTML=fleetTableHTML(list); return; }
+  // Groups are held in a module array and the card refers to its INDEX.
+  // Putting the transporter's name into the onclick attribute broke the
+  // markup the moment a name contained a quote or an apostrophe —
+  // 'Kruger & Sons "Pty"' terminated the attribute early.
+  FLEET_GROUPS=fleetGroups(list);
+  $("fleetList").innerHTML=FLEET_GROUPS.map((g,gi)=>{
+    const open=FLEET_OPEN[g.name]!==false;
+    return `<div class="card">
+      <div class="f-haul" onclick="fleetToggle(${gi})">
+        <div>
+          <div class="f-haul-n">${open?"▾":"▸"} ${esc(g.name)}</div>
+          <div class="f-haul-s">${g.trucks.length} truck${g.trucks.length!==1?"s":""} ·
+            ${Object.keys(g.drivers).length} driver${Object.keys(g.drivers).length!==1?"s":""}</div>
+        </div>
+      </div>
+      ${open?fleetTableHTML(g.trucks,true):""}
+    </div>`;
+  }).join("");
+}
+function fleetTableHTML(list,inner){
+  const rows=list.map(f=>`<tr>
+    <td class="f-reg">${esc(f.reg||"")}</td>
+    <td>${esc(f.trailer1||"—")}</td>
+    <td>${esc(f.trailer2||"—")}</td>
+    ${inner?"":`<td>${esc(f.transporter||"—")}</td>`}
+    <td>${esc(f.driver||"—")}</td>
+    <td>${f.tare?Number(f.tare).toLocaleString():"—"}</td>
+    <td style="text-align:right;white-space:nowrap">
+      <button class="fbtn sm" onclick="fleetEdit('${f.id}')">Edit</button>
+      <button class="fbtn sm dngr" onclick="fleetRemove('${f.id}')">Remove</button>
+    </td></tr>`).join("");
+  const head=`<tr><th>Registration</th><th>Trailer 1</th><th>Trailer 2</th>${inner?"":"<th>Transporter</th>"}<th>Driver</th><th>Tare</th><th></th></tr>`;
+  const tbl=`<div style="overflow-x:auto${inner?";margin-top:10px":""}"><table class="f-tbl"><thead>${head}</thead><tbody>${rows}</tbody></table></div>`;
+  return inner?tbl:`<div class="card" style="padding:6px">${tbl}</div>`;
+}
+
+// ── save / edit / remove ─────────────────────────────────────
+function fleetClearForm(){
+  ["fReg","fTrl1","fTrl2","fDriver","fTransporter","fTare"].forEach(id=>$(id).value="");
+  FLEET_EDIT=null; $("fSaveBtn").textContent="Add truck"; $("fEditNote").textContent="";
+}
+function fleetEdit(id){
+  const f=FLEET.find(x=>x.id===id); if(!f) return;
+  FLEET_EDIT=id;
+  $("fReg").value=f.reg||""; $("fTrl1").value=f.trailer1||""; $("fTrl2").value=f.trailer2||"";
+  $("fDriver").value=f.driver||""; $("fTransporter").value=f.transporter||"";
+  $("fTare").value=f.tare||"";
+  $("fSaveBtn").textContent="Save changes";
+  $("fEditNote").textContent="Editing "+f.reg;
+  window.scrollTo({top:0,behavior:"smooth"});
+}
+async function fleetSave(){
+  const reg=fNorm($("fReg").value);
+  if(!reg){ alert("A registration is required."); return; }
+  const tare=parseFloat(String($("fTare").value).replace(/[^\d.]/g,""));
+  const row={
+    site:fleetSite(), reg,
+    trailer1:fNorm($("fTrl1").value), trailer2:fNorm($("fTrl2").value),
+    driver:fClean($("fDriver").value), transporter:fClean($("fTransporter").value),
+    tare:(isFinite(tare)&&tare>0)?tare:null, active:true, deleted:false
+  };
+  $("fSaveBtn").disabled=true;
+  try{
+    // upsert on (site, reg) — re-adding a truck edits it rather than
+    // creating a second row the weighbridge would have to reconcile
+    await sbUpsert("fleet?on_conflict=site,reg", row);
+    fleetClearForm();
+    await loadFleet();
+    $("fleetStatus").textContent="Saved "+reg;
+  }catch(e){
+    if(/403|401/.test(e.message)){ fleetGate("readonly"); }
+    else alert("Could not save: "+e.message);
+  }
+  $("fSaveBtn").disabled=false;
+}
+async function fleetRemove(id){
+  const f=FLEET.find(x=>x.id===id); if(!f) return;
+  if(!confirm("Remove "+f.reg+" from the fleet list?")) return;
+  try{
+    // soft delete: a row that simply vanished could not travel to the
+    // weighbridge, and would reappear on its next push
+    await sbPatch("fleet?id=eq."+f.id, {deleted:true, active:false});
+    await loadFleet();
+  }catch(e){
+    if(/403|401/.test(e.message)) fleetGate("readonly");
+    else alert("Could not remove: "+e.message);
+  }
+}
+async function sbUpsert(path, body){
+  const r=await fetch(SB_URL+"/rest/v1/"+path,{
+    method:"POST",
+    headers:{...authHeaders(),"Content-Type":"application/json",
+             "Prefer":"resolution=merge-duplicates,return=minimal"},
+    body:JSON.stringify(body)
+  });
+  if(!r.ok){ let d=""; try{ d=(await r.text()).slice(0,200); }catch(e){}
+             throw new Error(r.status+(d?": "+d:"")); }
+}
+function esc(v){ return String(v==null?"":v)
+  .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+// ── template / import / export ───────────────────────────────
+// Same columns and the same header matching as the weighbridge app, so one
+// sheet works in both places. XLSX is written with STORED zip entries — no
+// library, no compression needed.
+const F_COLS=["Registration","Trailer 1","Trailer 2","Driver","Transporter","Tare (kg)"];
+const F_NOTE=[["How to use this sheet"],[""],
+  ["1.","One truck per line on the \"Fleet\" sheet."],
+  ["2.","Only Registration is compulsory. A blank cell never wipes a detail"],
+  ["","that is already on record."],
+  ["3.","Delete the two example lines starting with # before you upload."],
+  ["4.","Upload it on the Fleet page of the ISS Remote Monitor."],[""],
+  ["Registration","The horse / rigid registration as it appears on the plate."],
+  ["Trailer 1","First trailer or link. Blank for a rigid."],
+  ["Trailer 2","Second trailer of a superlink. Blank otherwise."],
+  ["Driver","Usual driver — a default the clerk can change on the day."],
+  ["Transporter","Transport company that runs the truck."],
+  ["Tare (kg)","Empty mass in kilograms, digits only. Optional."],[""],
+  ["The column ORDER may change and extra columns are ignored — the headings are what matter."]];
+
+function _crc32(u8){ let t=_crc32.t;
+  if(!t){ t=_crc32.t=new Int32Array(256);
+    for(let n=0;n<256;n++){ let c=n; for(let k=0;k<8;k++) c=(c&1)?(0xEDB88320^(c>>>1)):(c>>>1); t[n]=c; } }
+  let crc=-1; for(let i=0;i<u8.length;i++) crc=(crc>>>8)^t[(crc^u8[i])&0xFF];
+  return (crc^-1)>>>0; }
+function _zipStore(files){
+  const enc=new TextEncoder(),parts=[],cd=[]; let off=0; const d=new Date();
+  const dT=((d.getHours()<<11)|(d.getMinutes()<<5)|(d.getSeconds()>>1))&0xFFFF;
+  const dD=((((d.getFullYear()-1980)&0x7F)<<9)|((d.getMonth()+1)<<5)|d.getDate())&0xFFFF;
+  files.forEach(f=>{ const nm=enc.encode(f.name),dt=f.data,crc=_crc32(dt);
+    const l=new Uint8Array(30+nm.length),lv=new DataView(l.buffer);
+    lv.setUint32(0,0x04034b50,true);lv.setUint16(4,20,true);lv.setUint16(10,dT,true);lv.setUint16(12,dD,true);
+    lv.setUint32(14,crc,true);lv.setUint32(18,dt.length,true);lv.setUint32(22,dt.length,true);
+    lv.setUint16(26,nm.length,true); l.set(nm,30); parts.push(l,dt);
+    const c=new Uint8Array(46+nm.length),cv=new DataView(c.buffer);
+    cv.setUint32(0,0x02014b50,true);cv.setUint16(4,20,true);cv.setUint16(6,20,true);
+    cv.setUint16(12,dT,true);cv.setUint16(14,dD,true);cv.setUint32(16,crc,true);
+    cv.setUint32(20,dt.length,true);cv.setUint32(24,dt.length,true);cv.setUint16(28,nm.length,true);
+    cv.setUint32(42,off,true); c.set(nm,46); cd.push(c); off+=l.length+dt.length; });
+  const cds=cd.reduce((a,b)=>a+b.length,0);
+  const e=new Uint8Array(22),ev=new DataView(e.buffer);
+  ev.setUint32(0,0x06054b50,true);ev.setUint16(8,files.length,true);ev.setUint16(10,files.length,true);
+  ev.setUint32(12,cds,true);ev.setUint32(16,off,true);
+  const all=parts.concat(cd,[e]); const out=new Uint8Array(all.reduce((a,b)=>a+b.length,0));
+  let q=0; all.forEach(b=>{out.set(b,q);q+=b.length;}); return out; }
+function _xe(v){ return String(v==null?"":v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+function _cn(i){ let s="";i++;while(i>0){const m=(i-1)%26;s=String.fromCharCode(65+m)+s;i=Math.floor((i-1)/26);}return s; }
+function _sheet(rows,o){ o=o||{};
+  const view=o.head?'<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>':"";
+  const cols=o.widths?"<cols>"+o.widths.map((w,i)=>`<col min="${i+1}" max="${i+1}" width="${w}" customWidth="1"/>`).join("")+"</cols>":"";
+  const body=rows.map((r,ri)=>"<row r=\""+(ri+1)+"\">"+(r||[]).map((v,ci)=>{
+    if(v==null||v==="") return "";
+    const ref=_cn(ci)+(ri+1), st=(o.head&&ri===0)?' s="1"':"";
+    return (typeof v==="number"&&isFinite(v))
+      ? `<c r="${ref}"${st}><v>${v}</v></c>`
+      : `<c r="${ref}"${st} t="inlineStr"><is><t xml:space="preserve">${_xe(v)}</t></is></c>`;
+  }).join("")+"</row>").join("");
+  return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'+view+cols+"<sheetData>"+body+"</sheetData></worksheet>"; }
+const _STY='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF12283D"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf/></cellStyleXfs><cellXfs count="2"><xf xfId="0"/><xf xfId="0" fontId="1" fillId="2" applyFont="1" applyFill="1"/></cellXfs></styleSheet>';
+function buildXLSX(sheets){
+  const E=x=>new TextEncoder().encode(x), n=sheets.length;
+  const ct='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'+
+    sheets.map((_,i)=>`<Override PartName="/xl/worksheets/sheet${i+1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join("")+
+    '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>';
+  const rels='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>';
+  const wb='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>'+
+    sheets.map((s,i)=>`<sheet name="${_xe(s.name)}" sheetId="${i+1}" r:id="rId${i+1}"/>`).join("")+"</sheets></workbook>";
+  const wbr='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'+
+    sheets.map((_,i)=>`<Relationship Id="rId${i+1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i+1}.xml"/>`).join("")+
+    `<Relationship Id="rId${n+1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`;
+  const files=[{name:"[Content_Types].xml",data:E(ct)},{name:"_rels/.rels",data:E(rels)},
+    {name:"xl/workbook.xml",data:E(wb)},{name:"xl/_rels/workbook.xml.rels",data:E(wbr)},
+    {name:"xl/styles.xml",data:E(_STY)}];
+  sheets.forEach((s,i)=>files.push({name:`xl/worksheets/sheet${i+1}.xml`,data:E(_sheet(s.rows,s.opts))}));
+  return new Blob([_zipStore(files)],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}); }
+function _dl(blob,name){ const a=document.createElement("a");
+  a.href=URL.createObjectURL(blob); a.download=name; a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),4000); }
+
+function fleetTemplate(){
+  const rows=[F_COLS,
+    ["# ABC 123 GP","TRL 456 GP","TRL 789 GP","John Dlamini","ABC Transport",14300],
+    ["# DEF 456 MP","TRL 111 MP","","Sipho Nkosi","Commodities Variation",13800]];
+  _dl(buildXLSX([{name:"Fleet",rows,opts:{head:true,widths:[18,16,16,22,26,12]}},
+                 {name:"Instructions",rows:F_NOTE,opts:{widths:[16,80]}}]),
+      "Fleet-Import-Template.xlsx");
+}
+function fleetExport(){
+  const rows=[F_COLS].concat(FLEET.map(f=>[f.reg||"",f.trailer1||"",f.trailer2||"",
+    f.driver||"",f.transporter||"",f.tare?Number(f.tare):""]));
+  _dl(buildXLSX([{name:"Fleet",rows,opts:{head:true,widths:[18,16,16,22,26,12]}}]),
+      "Fleet-"+fleetSite()+"-"+new Date().toISOString().slice(0,10)+".xlsx");
+}
+
+// ── reading a sheet the client uploads ───────────────────────
+async function _inflateRaw(u8){
+  const ds=new DecompressionStream("deflate-raw");
+  const st=new Blob([u8]).stream().pipeThrough(ds);
+  return new Uint8Array(await new Response(st).arrayBuffer());
+}
+async function _unzip(buf){
+  const u8=new Uint8Array(buf), dv=new DataView(u8.buffer);
+  let end=-1;
+  for(let i=u8.length-22;i>=0;i--) if(dv.getUint32(i,true)===0x06054b50){ end=i; break; }
+  if(end<0) throw new Error("not a valid .xlsx");
+  const n=dv.getUint16(end+10,true); let p=dv.getUint32(end+16,true);
+  const out={};
+  for(let i=0;i<n;i++){
+    const meth=dv.getUint16(p+10,true), csz=dv.getUint32(p+20,true);
+    const nl=dv.getUint16(p+28,true), el=dv.getUint16(p+30,true), cl=dv.getUint16(p+32,true);
+    const lo=dv.getUint32(p+42,true);
+    const nm=new TextDecoder().decode(u8.subarray(p+46,p+46+nl));
+    const lnl=dv.getUint16(lo+26,true), lel=dv.getUint16(lo+28,true);
+    const ds=lo+30+lnl+lel, raw=u8.subarray(ds,ds+csz);
+    out[nm]= meth===0 ? raw : await _inflateRaw(raw);
+    p+=46+nl+el+cl;
+  }
+  return out;
+}
+function _colIdx(ref){ const m=/^([A-Z]+)/.exec(ref||""); if(!m) return 0;
+  let n=0; for(const ch of m[1]) n=n*26+(ch.charCodeAt(0)-64); return n-1; }
+async function parseXLSX(buf){
+  const z=await _unzip(buf);
+  const dec=new TextDecoder();
+  let shared=[];
+  if(z["xl/sharedStrings.xml"]){
+    const d=new DOMParser().parseFromString(dec.decode(z["xl/sharedStrings.xml"]),"application/xml");
+    shared=[...d.getElementsByTagName("si")].map(si=>
+      [...si.getElementsByTagName("t")].map(t=>t.textContent).join(""));
+  }
+  const name=Object.keys(z).filter(k=>/^xl\/worksheets\/sheet\d+\.xml$/.test(k)).sort()[0];
+  if(!name) throw new Error("no sheet in that workbook");
+  const d=new DOMParser().parseFromString(dec.decode(z[name]),"application/xml");
+  return [...d.getElementsByTagName("row")].map(r=>{
+    const cells=[];
+    [...r.getElementsByTagName("c")].forEach(c=>{
+      const i=_colIdx(c.getAttribute("r")), t=c.getAttribute("t");
+      let v="";
+      if(t==="inlineStr"){ v=[...c.getElementsByTagName("t")].map(x=>x.textContent).join(""); }
+      else { const vn=c.getElementsByTagName("v")[0]; v=vn?vn.textContent:"";
+             if(t==="s") v=shared[parseInt(v)]||""; }
+      cells[i]=v;
+    });
+    for(let i=0;i<cells.length;i++) if(cells[i]===undefined) cells[i]="";
+    return cells;
+  });
+}
+function parseCSVRows(text){
+  const rows=[]; let row=[],cur="",q=false;
+  for(let i=0;i<text.length;i++){ const c=text[i];
+    if(q){ if(c==='"'){ if(text[i+1]==='"'){cur+='"';i++;} else q=false; } else cur+=c; }
+    else if(c==='"') q=true;
+    else if(c===","||c===";"||c==="\t"){ row.push(cur); cur=""; }
+    else if(c==="\n"){ row.push(cur); rows.push(row); row=[]; cur=""; }
+    else if(c!=="\r") cur+=c;
+  }
+  if(cur!==""||row.length){ row.push(cur); rows.push(row); }
+  return rows.map(r=>r.map(x=>x.replace(/^\uFEFF/,"")));
+}
+function _fCols(hdr){
+  const h=(hdr||[]).map(c=>String(c||"").toLowerCase().trim());
+  const find=(re,skip)=>{ for(let i=0;i<h.length;i++){ if(skip&&skip.indexOf(i)>=0) continue;
+    if(re.test(h[i])) return i; } return -1; };
+  const m={};
+  m.trailer2=find(/trailer\s*(2|b|two)/);
+  m.trailer1=find(/trailer|^trl/, m.trailer2>=0?[m.trailer2]:null);
+  m.driver=find(/driver/); m.transporter=find(/transport|carrier|hauli?er/);
+  m.tare=find(/tare|empty\s*(weight|mass)/);
+  const used=[m.trailer1,m.trailer2,m.driver,m.transporter,m.tare].filter(i=>i>=0);
+  m.reg=find(/^reg|registration|horse|truck|vehicle|plate|fleet/,used);
+  return m;
+}
+const F_HDRWORD=/^(reg|registration|vehicle|truck|horse|plate)$/i;
+async function fleetImport(input){
+  const f=input.files&&input.files[0]; if(!f) return;
+  try{
+    let rows;
+    if(/\.xlsx$/i.test(f.name)) rows=await parseXLSX(await f.arrayBuffer());
+    else rows=parseCSVRows(await f.text());
+    rows=(rows||[]).filter(r=>r&&r.some(c=>String(c||"").trim()!==""));
+    if(!rows.length){ alert("That file is empty."); input.value=""; return; }
+    let map=_fCols(rows[0]), start=1;
+    const hits=Object.keys(map).filter(k=>map[k]>=0).length;
+    const regIsHdr=map.reg>=0 && F_HDRWORD.test(String(rows[0][map.reg]||"").trim());
+    if(!(hits>=2||regIsHdr)){ map={reg:0,trailer1:1,trailer2:2,driver:3,transporter:4,tare:5}; start=0; }
+    if(map.reg<0) map.reg=0;
+    const parsed=[], seen={};
+    for(let i=start;i<rows.length;i++){
+      const r=rows[i]||[]; const cell=k=>map[k]>=0?String(r[map[k]]==null?"":r[map[k]]).trim():"";
+      let reg=cell("reg");
+      if(!reg||reg.charAt(0)==="#"||F_HDRWORD.test(reg)) continue;
+      reg=fNorm(reg); if(seen[reg]) continue; seen[reg]=1;
+      const tare=parseFloat(cell("tare").replace(/[^\d.]/g,""));
+      parsed.push({site:fleetSite(),reg,trailer1:fNorm(cell("trailer1")),trailer2:fNorm(cell("trailer2")),
+        driver:cell("driver"),transporter:cell("transporter"),
+        tare:(isFinite(tare)&&tare>0)?tare:null,active:true,deleted:false});
+    }
+    if(!parsed.length){ alert("No vehicle registrations found in that file."); input.value=""; return; }
+    FLEET_PENDING=parsed;
+    fleetImportPreview(f.name);
+  }catch(e){ console.error(e); alert("Could not read that file: "+e.message); }
+  input.value="";
+}
+function fleetImportPreview(fname){
+  const list=FLEET_PENDING||[];
+  const have=new Set(FLEET.map(f=>fNorm(f.reg)));
+  const nNew=list.filter(r=>!have.has(r.reg)).length;
+  const hs=[...new Set(list.map(r=>r.transporter).filter(Boolean))];
+  const none=list.filter(r=>!r.transporter).length;
+  $("fImportBox").innerHTML=`
+    <div class="card" style="margin-top:12px;border-color:#2a6a8a">
+      <div style="font-size:13px;font-weight:700;margin-bottom:6px">${esc(fname)}</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
+        ${list.length} truck${list.length!==1?"s":""} read —
+        <b style="color:#7ee2a8">${nNew} new</b>,
+        <b style="color:#f0c674">${list.length-nNew} already on the list</b>.<br/>
+        Transporters in this file: <b>${hs.length}</b>${hs.length?" — "+esc(hs.slice(0,4).join(", "))+(hs.length>4?" +"+(hs.length-4)+" more":""):""}
+        ${none?`<br/><span style="color:#f0c674">${none} row${none!==1?"s have":" has"} no transporter.</span>`:""}
+      </div>
+      <div style="max-height:240px;overflow:auto">${fleetPreviewTable(list.slice(0,15),have)}</div>
+      ${list.length>15?`<div style="font-size:11px;color:var(--muted);margin-top:6px">…and ${list.length-15} more</div>`:""}
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button class="fbtn pri" id="fImpBtn" onclick="fleetImportCommit()">Import ${list.length}</button>
+        <button class="fbtn" onclick="FLEET_PENDING=null;document.getElementById('fImportBox').innerHTML=''">Cancel</button>
+      </div>
+    </div>`;
+}
+function fleetPreviewTable(list,have){
+  return `<table class="f-tbl"><thead><tr><th>Registration</th><th>Driver</th><th>Transporter</th><th>Tare</th><th></th></tr></thead>
+    <tbody>${list.map(r=>{
+      const ex=FLEET.find(f=>fNorm(f.reg)===r.reg);
+      const moved = ex && r.transporter && ex.transporter && r.transporter!==ex.transporter;
+      return `<tr><td class="f-reg">${esc(r.reg)}</td><td>${esc(r.driver||"—")}</td>
+        <td>${moved?`<span style="color:#f0c674">${esc(ex.transporter)} → ${esc(r.transporter)}</span>`:esc(r.transporter||"—")}</td>
+        <td>${r.tare?Number(r.tare).toLocaleString():"—"}</td>
+        <td style="color:${have.has(r.reg)?"#f0c674":"#7ee2a8"};font-weight:700">${have.has(r.reg)?"UPDATE":"NEW"}</td></tr>`;
+    }).join("")}</tbody></table>`;
+}
+async function fleetImportCommit(){
+  const list=FLEET_PENDING||[]; if(!list.length) return;
+  const btn=$("fImpBtn"); if(btn){ btn.disabled=true; btn.textContent="Importing…"; }
+  try{
+    // in batches, so one long list does not become one enormous request
+    for(let i=0;i<list.length;i+=100){
+      await sbUpsert("fleet?on_conflict=site,reg", list.slice(i,i+100));
+      if(btn) btn.textContent="Importing… "+Math.min(i+100,list.length)+"/"+list.length;
+    }
+    FLEET_PENDING=null; $("fImportBox").innerHTML="";
+    await loadFleet();
+    $("fleetStatus").textContent="Imported "+list.length+" truck"+(list.length!==1?"s":"");
+  }catch(e){
+    if(/403|401/.test(e.message)){ fleetGate("readonly"); $("fImportBox").innerHTML=""; }
+    else alert("Import failed: "+e.message);
+    if(btn){ btn.disabled=false; btn.textContent="Import "+list.length; }
+  }
+}
+
 // ── nav ──────────────────────────────────────────────────────
 let curPage = "plant";
 function nav(btn){
@@ -451,6 +992,7 @@ function nav(btn){
   curPage = btn.dataset.page;
   $("pg-"+curPage).classList.add("active");
   if(curPage==="time") loadTimeStudy();
+  if(curPage==="fleet") loadFleet();
   if(curPage==="admin") loadAdmin();
 }
 
