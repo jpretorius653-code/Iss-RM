@@ -205,14 +205,6 @@ select,input{background:var(--panel);color:var(--ink);border:1px solid var(--lin
 input{width:100%}
 .filter-row{display:flex;gap:8px;margin-bottom:14px;align-items:center;flex-wrap:wrap}
 
-/* ── belt / weighbridge mode switch ──────────────────────── */
-#modeBar{display:flex;gap:6px;padding:8px 12px;background:#0b1017;border-bottom:1px solid var(--line)}
-.mode-btn{flex:1;padding:9px 6px;border-radius:9px;border:1px solid var(--line);background:var(--panel);
-  color:var(--muted);font-family:inherit;font-size:11px;font-weight:800;letter-spacing:1px;
-  text-transform:uppercase;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px}
-.mode-btn.on{background:#12324e;border-color:#29ABE2;color:#cfe9fb}
-.mode-btn svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.9;stroke-linecap:round}
-
 /* ── weighbridge live weight ─────────────────────────────── */
 .wb-live{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-bottom:14px}
 .wb-card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px 16px;position:relative;overflow:hidden}
@@ -500,6 +492,43 @@ input{width:100%}
   </div>
 
   <div class="page" id="pg-admin">
+    <div class="eyebrow">Sites</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:10px">
+      A site code is what ties a weighbridge, its tickets and its logins together.
+      It must match the Site Code typed into the weighbridge app <b>exactly</b> — lower case, no spaces.
+    </div>
+    <div class="card" style="margin-bottom:12px">
+      <div class="f-grid">
+        <div><div class="f-lbl">New site code *</div>
+          <input id="asCode" placeholder="commvar" autocapitalize="off" spellcheck="false"/></div>
+        <div><div class="f-lbl">Display name</div>
+          <input id="asName" placeholder="Commodities Variation"/></div>
+      </div>
+      <button class="fbtn pri" style="margin-top:10px" onclick="adminCreateSite()">Create site</button>
+    </div>
+    <div id="sitesList"><div class="empty">Loading…</div></div>
+
+    <div class="eyebrow">Logins</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:10px">
+      Create the login under Supabase → Authentication → Users, then link it to its site here.
+      One login per PC where you can — a shared login cannot be revoked for just one bridge.
+    </div>
+    <div class="card" style="margin-bottom:12px">
+      <div class="f-grid">
+        <div><div class="f-lbl">Login email</div>
+          <input id="alEmail" list="alEmails" placeholder="commvar-wb1@iss.local" autocapitalize="off" spellcheck="false"/>
+          <datalist id="alEmails"></datalist></div>
+        <div><div class="f-lbl">Site</div>
+          <input id="alSite" list="alSites" placeholder="commvar" autocapitalize="off" spellcheck="false"/>
+          <datalist id="alSites"></datalist></div>
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-size:12px;cursor:pointer">
+        <input type="checkbox" id="alAdmin"/> ISS admin — every site, leave the site box empty
+      </label>
+      <button class="fbtn pri" style="margin-top:10px" onclick="adminLinkUser()">Link login to site</button>
+    </div>
+    <div id="usersList"></div>
+
     <div class="eyebrow">Scale management</div>
     <div style="font-size:12px;color:var(--muted);margin-bottom:10px">
       New boards appear here automatically. Set a name, assign a site, choose the type, then Retire or Remove as needed.
@@ -511,14 +540,6 @@ input{width:100%}
 </div><!-- /pages -->
 
 <!-- tab bar -->
-<div id="modeBar" style="display:none">
-  <button class="mode-btn" id="modeBelt" onclick="setMode('belt')">
-    <svg viewBox="0 0 24 24"><path d="M3 15h18M5 15a2 2 0 1 0 4 0M15 15a2 2 0 1 0 4 0M4 11h16l-2-4H6z"/></svg>Belt Plant
-  </button>
-  <button class="mode-btn" id="modeWb" onclick="setMode('wb')">
-    <svg viewBox="0 0 24 24"><path d="M4 8h10v7H4zM14 10h3l3 3v2h-6z"/><circle cx="7" cy="17" r="1.5"/><circle cx="18" cy="17" r="1.5"/></svg>Weighbridge
-  </button>
-</div>
 <div id="tabs">
   <button class="tab on" data-page="plant" onclick="nav(this)">
     <svg viewBox="0 0 24 24"><path d="M3 18h18M3 12h18M9 6h12"/></svg>Plant
@@ -596,7 +617,7 @@ async function sb(q){
 //  site login may only READ this table and every save comes back 403.
 //  fleetGate() says so in plain language instead of failing silently.
 // ════════════════════════════════════════════════════════════
-const DASH_BUILD="2026-08-23d";      // bump on every deploy
+const DASH_BUILD="2026-08-23g";      // bump on every deploy
 try{ console.log("ISS Remote Monitor — build "+DASH_BUILD); }catch(e){}
 let FLEET=[], FLEET_SITE="", FLEET_EDIT=null, FLEET_PENDING=null, FLEET_RO=false;
 
@@ -1174,20 +1195,6 @@ function renderOrders(){
 //  A site with no belt scales has no choice to offer — the switch
 //  hides itself and the mode is pinned to weighbridge.
 // ════════════════════════════════════════════════════════════
-const MODE_TABS = { belt:["plant","scales","reports","time"],
-                    wb:  ["trucks","orders","fleet","reports"] };
-let APP_MODE = "belt";
-function setMode(m){
-  APP_MODE = (m==="wb") ? "wb" : "belt";
-  try{ localStorage.setItem("iss_mode", APP_MODE); }catch(e){}
-  applySiteCapabilities();
-  // If the current tab belongs to the other mode, land somewhere real.
-  if(MODE_TABS[APP_MODE].indexOf(curPage) < 0){
-    const first=document.querySelector('.tab[data-page="'+MODE_TABS[APP_MODE][0]+'"]');
-    if(first) nav(first);
-  }
-}
-
 // ── live weighbridge weight ─────────────────────────────────
 // The weighbridge indicator posts to the same readings table as the
 // belt scales, via its own gateway. A row older than 90 seconds is
@@ -1267,32 +1274,21 @@ function siteHasBelt(site){
 }
 /* Admin sees everything: they switch between sites, and hiding a tab
    would make another site's equipment unreachable. */
+/* Every tab is shown, except the ones about equipment this site does not
+   have. No modes, no switch to find: a weighbridge-only site simply never
+   sees the plant screens, and a site with belts sees everything. */
 function applySiteCapabilities(){
-  const hasBelt = IS_ADMIN || siteHasBelt(MY_SITE || plantSite());
-  // No belt scales means no choice to make: pin to weighbridge and hide
-  // the switch rather than offering an empty plant screen.
-  if(!hasBelt) APP_MODE="wb";
-  const bar=$("modeBar");
-  if(bar) bar.style.display = hasBelt ? "flex" : "none";
-  const mb=$("modeBelt"), mw=$("modeWb");
-  if(mb) mb.classList.toggle("on", APP_MODE==="belt");
-  if(mw) mw.classList.toggle("on", APP_MODE==="wb");
-
-  // A tab shows when its mode is active AND the site can support it.
-  const allowed = MODE_TABS[APP_MODE] || [];
+  const show = IS_ADMIN || siteHasBelt(MY_SITE || plantSite());
   document.querySelectorAll('.tab').forEach(btn=>{
     const id=btn.dataset.page;
     if(id==="admin") return;                       // admin tab manages itself
-    let vis = allowed.indexOf(id) >= 0;
-    if(vis && BELT_ONLY_TABS.indexOf(id)>=0 && !hasBelt) vis=false;
-    btn.style.display = vis ? "" : "none";
+    btn.style.display = (!show && BELT_ONLY_TABS.indexOf(id)>=0) ? "none" : "";
   });
-  const show = hasBelt;
   // If the operator is standing on a tab that just disappeared, move them
   // somewhere real rather than leaving a blank page behind.
   const cur=document.querySelector('.tab[data-page="'+curPage+'"]');
   if(cur && cur.style.display==="none"){
-    const to=document.querySelector('.tab[data-page="'+(allowed[0]||"trucks")+'"]');
+    const to=document.querySelector('.tab[data-page="trucks"]');
     if(to) nav(to);
   }
   // Reports offers belt or weighbridge; with no belt, only one is honest.
@@ -1410,7 +1406,91 @@ async function loadTimeStudy(){
   $("timeList").innerHTML=`<div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Hour</th><th>Shift</th><th>State</th><th>Feed t</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   $("timeStatus").textContent=`Updated ${new Date().toLocaleTimeString()}`;
 }
+// ════════════════════════════════════════════════════════════
+//  SITE + LOGIN ADMIN
+//
+//  Everything here goes through SECURITY DEFINER functions that refuse
+//  a non-admin, because reading auth.users is not something a browser
+//  session can or should do directly.
+// ════════════════════════════════════════════════════════════
+async function rpc(fn, args){
+  const r=await fetch(SB_URL+"/rest/v1/rpc/"+fn,{
+    method:"POST", headers:{...authHeaders(),"Content-Type":"application/json"},
+    body: JSON.stringify(args||{})});
+  const txt=await r.text();
+  if(!r.ok){
+    let msg=txt;
+    try{ const j=JSON.parse(txt); msg=j.message||j.hint||txt; }catch(e){}
+    throw new Error(msg.slice(0,200));
+  }
+  return txt?JSON.parse(txt):null;
+}
+async function loadSites(){
+  let sites=[];
+  try{ sites=await rpc("iss_admin_sites"); }
+  catch(e){
+    $("sitesList").innerHTML='<div class="f-warn">Site admin is not installed on this backend yet — run <code>13_site_admin.sql</code>.<br/><span style="opacity:.8">'+esc(e.message)+'</span></div>';
+    return;
+  }
+  $("alSites").innerHTML=(sites||[]).map(s=>`<option value="${esc(s.code)}"></option>`).join("");
+  if(!sites.length){ $("sitesList").innerHTML='<div class="empty">No sites yet — create one above.</div>'; }
+  else $("sitesList").innerHTML=`<div class="card" style="padding:6px"><div style="overflow-x:auto">
+    <table class="f-tbl"><thead><tr><th>Code</th><th>Name</th><th>Logins</th><th>Scales</th><th>Tickets</th></tr></thead>
+    <tbody>${sites.map(s=>`<tr>
+      <td class="f-reg">${esc(s.code)}</td><td>${esc(s.name||"—")}</td>
+      <td>${s.users}</td><td>${s.scales}</td><td>${Number(s.tickets).toLocaleString()}</td>
+    </tr>`).join("")}</tbody></table></div></div>`;
+  loadAdminUsers();
+}
+async function adminCreateSite(){
+  const code=($("asCode").value||"").trim().toLowerCase();
+  if(!code){ alert("A site code is required."); return; }
+  try{
+    await rpc("iss_admin_create_site",{p_code:code,p_name:($("asName").value||"").trim()||null});
+    $("asCode").value=""; $("asName").value="";
+    await loadSites();
+  }catch(e){ alert("Could not create the site:\n\n"+e.message); }
+}
+async function loadAdminUsers(){
+  let users=[];
+  try{ users=await rpc("iss_admin_users"); }catch(e){ $("usersList").innerHTML=""; return; }
+  $("alEmails").innerHTML=(users||[]).map(u=>`<option value="${esc(u.email)}"></option>`).join("");
+  // A login with no site can sign in and then see nothing at all — which
+  // looks like a broken dashboard, not a missing permission. Call it out.
+  const orphans=(users||[]).filter(u=>!u.linked);
+  $("usersList").innerHTML=
+    (orphans.length?`<div class="f-warn"><b>${orphans.length} login${orphans.length!==1?"s are":" is"} not linked to a site.</b>
+       They can sign in and will see nothing: ${orphans.map(u=>esc(u.email)).join(", ")}</div>`:"")+
+    `<div class="card" style="padding:6px"><div style="overflow-x:auto">
+    <table class="f-tbl"><thead><tr><th>Login</th><th>Site</th><th>Role</th><th>Last sign-in</th><th></th></tr></thead>
+    <tbody>${(users||[]).map(u=>`<tr>
+      <td>${esc(u.email)}${u.confirmed?"":' <span class="wb-flag wb-stale">unconfirmed</span>'}</td>
+      <td>${u.site?esc(u.site):(u.is_admin?'<span style="color:#29ABE2">all sites</span>':'<span style="color:#f0c674">none</span>')}</td>
+      <td>${u.is_admin?"ISS admin":"site"}</td>
+      <td>${u.last_sign_in?new Date(u.last_sign_in).toLocaleDateString():"never"}</td>
+      <td style="text-align:right">${u.linked?`<button class="fbtn sm dngr" onclick="adminUnlink('${esc(u.email)}')">Unlink</button>`:""}</td>
+    </tr>`).join("")}</tbody></table></div></div>`;
+}
+async function adminLinkUser(){
+  const email=($("alEmail").value||"").trim();
+  const site=($("alSite").value||"").trim().toLowerCase();
+  const isAdmin=$("alAdmin").checked;
+  if(!email){ alert("Which login?"); return; }
+  if(!site && !isAdmin){ alert("Pick a site, or tick ISS admin."); return; }
+  try{
+    await rpc("iss_admin_link_user",{p_email:email,p_site:site||null,p_is_admin:isAdmin});
+    $("alEmail").value=""; $("alSite").value=""; $("alAdmin").checked=false;
+    await loadSites();
+  }catch(e){ alert("Could not link that login:\n\n"+e.message); }
+}
+async function adminUnlink(email){
+  if(!confirm("Remove "+email+" from its site?\n\nThat login will be able to sign in but see nothing.")) return;
+  try{ await rpc("iss_admin_unlink_user",{p_email:email}); await loadSites(); }
+  catch(e){ alert("Could not unlink:\n\n"+e.message); }
+}
+
 async function loadAdmin(){
+  if(IS_ADMIN) loadSites();
   if(!IS_ADMIN){ $("adminList").innerHTML='<div class="empty">Admin only.</div>'; return; }
   let rows;
   try{ rows = await sb("scales?select=*&order=posted_site.asc,display_name.asc"); }
@@ -1607,7 +1687,6 @@ async function discoverScales(){
     return ra-rb || (a.name||'').localeCompare(b.name||'');
   });
   SCALES = keep;
-  try{ APP_MODE = localStorage.getItem("iss_mode") || APP_MODE; }catch(e){}
   try{ applySiteCapabilities(); }catch(e){}
 }
 
