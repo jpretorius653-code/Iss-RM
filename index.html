@@ -205,6 +205,27 @@ select,input{background:var(--panel);color:var(--ink);border:1px solid var(--lin
 input{width:100%}
 .filter-row{display:flex;gap:8px;margin-bottom:14px;align-items:center;flex-wrap:wrap}
 
+/* ── belt / weighbridge mode switch ──────────────────────── */
+#modeBar{display:flex;gap:6px;padding:8px 12px;background:#0b1017;border-bottom:1px solid var(--line)}
+.mode-btn{flex:1;padding:9px 6px;border-radius:9px;border:1px solid var(--line);background:var(--panel);
+  color:var(--muted);font-family:inherit;font-size:11px;font-weight:800;letter-spacing:1px;
+  text-transform:uppercase;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px}
+.mode-btn.on{background:#12324e;border-color:#29ABE2;color:#cfe9fb}
+.mode-btn svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.9;stroke-linecap:round}
+
+/* ── weighbridge live weight ─────────────────────────────── */
+.wb-live{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-bottom:14px}
+.wb-card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px 16px;position:relative;overflow:hidden}
+.wb-card:before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:#D9B45B}
+.wb-name{font-size:10px;letter-spacing:1.2px;text-transform:uppercase;color:var(--muted)}
+.wb-kg{font-size:34px;font-weight:900;line-height:1.05;margin-top:6px;font-variant-numeric:tabular-nums}
+.wb-kg small{font-size:14px;font-weight:700;color:var(--muted);margin-left:4px}
+.wb-flag{display:inline-block;margin-top:6px;font-size:10px;font-weight:800;letter-spacing:1px;
+  text-transform:uppercase;padding:2px 8px;border-radius:99px}
+.wb-stable{background:#10241a;color:#7ee2a8;border:1px solid #235c3c}
+.wb-motion{background:#2a1f10;color:#f0c674;border:1px solid #5a4520}
+.wb-stale{background:#2a1414;color:#ff8a7a;border:1px solid #5a2a2a}
+
 /* ── fleet ───────────────────────────────────────────────── */
 .fbtn{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:8px;
   padding:8px 12px;font-size:12px;font-weight:700;font-family:inherit;cursor:pointer;white-space:nowrap}
@@ -391,6 +412,8 @@ input{width:100%}
 
   <!-- TRUCKS -->
   <div class="page" id="pg-trucks">
+    <div class="eyebrow">Live weight</div>
+    <div id="wbLive" class="wb-live"><div class="empty">Looking for a weighbridge…</div></div>
     <div class="eyebrow">Today</div>
     <div id="trucksToday" class="stat-grid"></div>
     <div id="trucksSplit" style="margin:-4px 0 16px;display:flex;gap:8px;flex-wrap:wrap"></div>
@@ -399,6 +422,21 @@ input{width:100%}
     <div class="eyebrow" style="margin-top:14px">Recent departures</div>
     <div id="trucksRecent"><div class="empty">Loading…</div></div>
     <div class="status-bar" id="trucksStatus"></div>
+  </div>
+
+  <div class="page" id="pg-orders">
+    <div class="eyebrow">Order progress</div>
+    <div class="f-note">Tonnage is counted from completed tickets, not typed in — an order closes itself when it gets there.</div>
+    <div class="filter-row">
+      <input id="oSearch" style="flex:2;min-width:160px" placeholder="Search order, customer, product…" oninput="renderOrders()"/>
+      <select id="oShow" style="flex:1;min-width:130px" onchange="renderOrders()">
+        <option value="open">Open orders</option>
+        <option value="all">All orders</option>
+        <option value="done">Completed</option>
+      </select>
+    </div>
+    <div id="ordersList"><div class="empty">Loading…</div></div>
+    <div class="status-bar" id="ordersStatus"></div>
   </div>
 
   <div class="page" id="pg-fleet">
@@ -473,6 +511,14 @@ input{width:100%}
 </div><!-- /pages -->
 
 <!-- tab bar -->
+<div id="modeBar" style="display:none">
+  <button class="mode-btn" id="modeBelt" onclick="setMode('belt')">
+    <svg viewBox="0 0 24 24"><path d="M3 15h18M5 15a2 2 0 1 0 4 0M15 15a2 2 0 1 0 4 0M4 11h16l-2-4H6z"/></svg>Belt Plant
+  </button>
+  <button class="mode-btn" id="modeWb" onclick="setMode('wb')">
+    <svg viewBox="0 0 24 24"><path d="M4 8h10v7H4zM14 10h3l3 3v2h-6z"/><circle cx="7" cy="17" r="1.5"/><circle cx="18" cy="17" r="1.5"/></svg>Weighbridge
+  </button>
+</div>
 <div id="tabs">
   <button class="tab on" data-page="plant" onclick="nav(this)">
     <svg viewBox="0 0 24 24"><path d="M3 18h18M3 12h18M9 6h12"/></svg>Plant
@@ -485,6 +531,9 @@ input{width:100%}
   </button>
   <button class="tab" data-page="trucks" onclick="nav(this)">
     <svg viewBox="0 0 24 24"><rect x="1" y="10" width="14" height="10" rx="1"/><path d="M15 14h4l3 3v3h-7V14z"/><circle cx="5" cy="20" r="2"/><circle cx="19" cy="20" r="2"/></svg>Trucks
+  </button>
+  <button class="tab" data-page="orders" onclick="nav(this)">
+    <svg viewBox="0 0 24 24"><path d="M5 4h11l3 3v13H5zM8 11h8M8 15h5"/></svg>Orders
   </button>
   <button class="tab" data-page="fleet" onclick="nav(this)">
     <svg viewBox="0 0 24 24"><path d="M4 7h10v8H4zM14 10h3l3 3v2h-6z"/><circle cx="7" cy="17" r="1.6"/><circle cx="18" cy="17" r="1.6"/></svg>Fleet
@@ -547,7 +596,7 @@ async function sb(q){
 //  site login may only READ this table and every save comes back 403.
 //  fleetGate() says so in plain language instead of failing silently.
 // ════════════════════════════════════════════════════════════
-const DASH_BUILD="2026-08-22e";      // bump on every deploy
+const DASH_BUILD="2026-08-23d";      // bump on every deploy
 try{ console.log("ISS Remote Monitor — build "+DASH_BUILD); }catch(e){}
 let FLEET=[], FLEET_SITE="", FLEET_EDIT=null, FLEET_PENDING=null, FLEET_RO=false;
 
@@ -1029,6 +1078,234 @@ async function fleetImportCommit(){
   }
 }
 
+// ════════════════════════════════════════════════════════════
+//  ORDER PROGRESS
+//
+//  Tonnage is never typed in — it is summed from completed tickets
+//  carrying that order number. A dispatch adds to the order; a
+//  receive against the same order subtracts, so a load rejected and
+//  brought back does not count twice.
+// ════════════════════════════════════════════════════════════
+let ORDERS=[], ORDER_TONS={};
+async function loadOrders(){
+  const site=String(MY_SITE||plantSite()||"").trim().toLowerCase();
+  const sf = site ? `&site=eq.${encodeURIComponent(site)}` : "";
+  $("ordersStatus").textContent="Loading…";
+  try{
+    ORDERS = await sb("orders?select=*&deleted=is.false"+sf+"&order=order_no.asc");
+  }catch(e){
+    if(String(e.message).startsWith("404")){
+      $("ordersList").innerHTML='<div class="empty">The orders table is not set up yet — run <code>06_fleet_orders_remote_write.sql</code>.</div>';
+      $("ordersStatus").textContent=""; return;
+    }
+    ORDERS=[];
+  }
+  ORDER_TONS={};
+  try{
+    // Only completed tickets count. An open ticket is a truck on the
+    // weighbridge, not tonnage delivered.
+    const rows=await sb("transactions?select=order_no,net,action&status=eq.complete&order_no=not.is.null"+sf+"&limit=5000");
+    rows.forEach(r=>{
+      const k=String(r.order_no||"").trim(); if(!k) return;
+      const t=Number(r.net)||0;
+      ORDER_TONS[k]=(ORDER_TONS[k]||0) + (isDispatch(r.action) ? t : -t);
+    });
+  }catch(e){}
+  renderOrders();
+  $("ordersStatus").textContent=`${ORDERS.length} order${ORDERS.length!==1?"s":""} · ${site}`;
+}
+function orderPct(o){
+  const done=ORDER_TONS[String(o.order_no||"").trim()]||0;
+  const target=Number(o.tons_target)||0;
+  if(!target) return {done,target:0,pct:null};
+  return {done,target,pct:Math.max(0,Math.min(999,(done/target)*100))};
+}
+function renderOrders(){
+  const q=($("oSearch").value||"").toLowerCase();
+  const show=$("oShow").value;
+  let list=ORDERS.filter(o=>!q||[o.order_no,o.customer,o.product,o.destination,o.transporter]
+                     .join(" ").toLowerCase().includes(q));
+  if(show==="open") list=list.filter(o=>o.active!==false);
+  if(show==="done") list=list.filter(o=>o.active===false);
+  if(!list.length){
+    $("ordersList").innerHTML='<div class="empty">'+(ORDERS.length?"No orders match":"No orders yet — create them here or in the weighbridge app")+"</div>";
+    return;
+  }
+  $("ordersList").innerHTML=list.map(o=>{
+    const p=orderPct(o);
+    // Over-delivery is worth seeing, not clipping to a tidy 100%.
+    const over = p.pct!=null && p.pct>100;
+    const barW = p.pct==null ? 0 : Math.min(100,p.pct);
+    const col  = over ? "#f0c674" : (p.pct!=null && p.pct>=99 ? "#7ee2a8" : "#29ABE2");
+    return `<div class="card" style="margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
+        <div style="flex:1;min-width:180px">
+          <div style="font-size:15px;font-weight:800">${esc(o.order_no||"—")}
+            ${o.active===false?'<span class="wb-flag wb-stable" style="margin-left:6px">closed</span>':''}</div>
+          <div style="font-size:12px;color:var(--muted);margin-top:2px">
+            ${esc(o.customer||"—")}${o.product?" · "+esc(o.product):""}${o.destination?" → "+esc(o.destination):""}</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:17px;font-weight:900" class="num">${fmt(p.done,1)}<span style="font-size:11px;color:var(--muted)"> t</span></div>
+          <div style="font-size:11px;color:var(--muted)">${p.target?("of "+fmt(p.target,0)+" t"):"open-ended"}</div>
+        </div>
+      </div>
+      ${p.pct==null?"":`
+      <div style="height:8px;background:#0d1620;border-radius:99px;margin-top:10px;overflow:hidden">
+        <div style="height:100%;width:${barW}%;background:${col};border-radius:99px"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:11px;margin-top:5px;color:var(--muted)">
+        <span>${p.pct.toFixed(1)}%</span>
+        <span>${over?`<b style="color:#f0c674">${fmt(p.done-p.target,1)} t over</b>`
+                    :`${fmt(Math.max(0,p.target-p.done),1)} t remaining`}</span>
+      </div>`}
+    </div>`;
+  }).join("");
+}
+
+// ════════════════════════════════════════════════════════════
+//  BELT / WEIGHBRIDGE MODE
+//
+//  Two different jobs share one dashboard: a wash plant with belt
+//  scales, and a weighbridge moving trucks. Mixing their tabs makes
+//  both harder to read, so the mode switch splits them and the tab
+//  bar only ever shows one job's screens.
+//
+//  A site with no belt scales has no choice to offer — the switch
+//  hides itself and the mode is pinned to weighbridge.
+// ════════════════════════════════════════════════════════════
+const MODE_TABS = { belt:["plant","scales","reports","time"],
+                    wb:  ["trucks","orders","fleet","reports"] };
+let APP_MODE = "belt";
+function setMode(m){
+  APP_MODE = (m==="wb") ? "wb" : "belt";
+  try{ localStorage.setItem("iss_mode", APP_MODE); }catch(e){}
+  applySiteCapabilities();
+  // If the current tab belongs to the other mode, land somewhere real.
+  if(MODE_TABS[APP_MODE].indexOf(curPage) < 0){
+    const first=document.querySelector('.tab[data-page="'+MODE_TABS[APP_MODE][0]+'"]');
+    if(first) nav(first);
+  }
+}
+
+// ── live weighbridge weight ─────────────────────────────────
+// The weighbridge indicator posts to the same readings table as the
+// belt scales, via its own gateway. A row older than 90 seconds is
+// shown as stale rather than pretending it is current — a frozen
+// number on a weighbridge screen is worse than an honest gap.
+const WB_STALE_MS = 90*1000;
+
+/* Two vocabularies reach this table. Cloud Sync writes "Loading" and
+   "Off Loading"; a connected bridge writes "dispatch" and "receive".
+   Both must read the same way or a site's dispatch/receive split silently
+   inverts the day it changes over. */
+function isDispatch(action){
+  const a=String(action||"").trim().toLowerCase();
+  if(!a) return false;
+  if(a.startsWith("dispatch")) return true;
+  if(a.startsWith("receive")) return false;
+  return /load/.test(a) && !/off/.test(a);      // Loading vs Off Loading
+}
+// Reads public.live_weight — one row per bridge, written by the weighbridge
+// app itself on a connected bridge. A site on Cloud Sync (Hillside) posts
+// nothing here, so the strip simply says so instead of showing a dead card.
+async function loadWbLive(){
+  const box=$("wbLive"); if(!box) return;
+  const site=String(MY_SITE||plantSite()||"").trim().toLowerCase();
+  let rows=[];
+  try{
+    rows=await sb("live_weight?select=*"+(site?`&site=eq.${encodeURIComponent(site)}`:"")+"&order=name.asc");
+  }catch(e){
+    if(String(e.message).startsWith("404")){
+      box.innerHTML='<div class="empty">Live weight is not set up on this backend yet '+
+        '— run <code>11_live_weight.sql</code>.</div>';
+      return;
+    }
+    box.innerHTML='<div class="empty">Could not read the live weight.</div>';
+    return;
+  }
+  if(!rows.length){
+    box.innerHTML='<div class="empty">No bridge here is publishing a live weight. '+
+      'On the weighbridge PC: Cloud → <b>Publish live weight</b>. '+
+      'Sites reporting through Cloud Sync send tickets only.</div>';
+    return;
+  }
+  box.innerHTML=rows.map(r=>{
+    const age=Date.now()-new Date(r.updated_at).getTime();
+    const stale=age>WB_STALE_MS;
+    const kg=(r.weight==null)?null:Math.round(Number(r.weight));
+    const flag = stale ? `<span class="wb-flag wb-stale">stale · ${durStr(age/60000)} old</span>`
+               : (r.stable ? '<span class="wb-flag wb-stable">stable</span>'
+                           : '<span class="wb-flag wb-motion">in motion</span>');
+    return `<div class="wb-card">
+      <div class="wb-name">${esc(r.name||r.device)}</div>
+      <div class="wb-kg" style="${stale?'color:var(--muted)':''}">${kg==null?"—":kg.toLocaleString()}<small>${esc(r.unit||'kg')}</small></div>
+      ${flag}</div>`;
+  }).join("");
+}
+
+// ════════════════════════════════════════════════════════════
+//  SITE CAPABILITIES
+//
+//  Not every site has belt scales. Commodities Variation is a
+//  weighbridge only, so Plant, Scales and Time Study are screens
+//  about equipment that does not exist there — and an empty plant
+//  page reads as a broken dashboard, not an absent belt.
+//
+//  Derived from the scales registry rather than a setting: if the
+//  site has a non-weighbridge scale allocated to it, it has a belt.
+//  That way adding a belt scale in Admin lights the tabs up on its
+//  own, and there is no second place to keep in step.
+// ════════════════════════════════════════════════════════════
+const BELT_ONLY_TABS = ["plant","scales","time"];
+function siteHasBelt(site){
+  const t=String(site||"").trim().toLowerCase();
+  if(!t) return true;                       // unknown site — hide nothing
+  return (SCALES||[]).some(s=>
+    String(s.site||"").trim().toLowerCase()===t &&
+    s.role!=="weighbridge" && s.role!=="gateway" && !s.retired);
+}
+/* Admin sees everything: they switch between sites, and hiding a tab
+   would make another site's equipment unreachable. */
+function applySiteCapabilities(){
+  const hasBelt = IS_ADMIN || siteHasBelt(MY_SITE || plantSite());
+  // No belt scales means no choice to make: pin to weighbridge and hide
+  // the switch rather than offering an empty plant screen.
+  if(!hasBelt) APP_MODE="wb";
+  const bar=$("modeBar");
+  if(bar) bar.style.display = hasBelt ? "flex" : "none";
+  const mb=$("modeBelt"), mw=$("modeWb");
+  if(mb) mb.classList.toggle("on", APP_MODE==="belt");
+  if(mw) mw.classList.toggle("on", APP_MODE==="wb");
+
+  // A tab shows when its mode is active AND the site can support it.
+  const allowed = MODE_TABS[APP_MODE] || [];
+  document.querySelectorAll('.tab').forEach(btn=>{
+    const id=btn.dataset.page;
+    if(id==="admin") return;                       // admin tab manages itself
+    let vis = allowed.indexOf(id) >= 0;
+    if(vis && BELT_ONLY_TABS.indexOf(id)>=0 && !hasBelt) vis=false;
+    btn.style.display = vis ? "" : "none";
+  });
+  const show = hasBelt;
+  // If the operator is standing on a tab that just disappeared, move them
+  // somewhere real rather than leaving a blank page behind.
+  const cur=document.querySelector('.tab[data-page="'+curPage+'"]');
+  if(cur && cur.style.display==="none"){
+    const to=document.querySelector('.tab[data-page="'+(allowed[0]||"trucks")+'"]');
+    if(to) nav(to);
+  }
+  // Reports offers belt or weighbridge; with no belt, only one is honest.
+  const rt=$("rType");
+  if(rt){
+    [...rt.options].forEach(o=>{ if(o.value==="belt") o.hidden = !show; });
+    if(!show && rt.value==="belt"){
+      rt.value="wb";
+      try{ toggleWbFilters(); }catch(e){}
+    }
+  }
+}
+
 // ── nav ──────────────────────────────────────────────────────
 let curPage = "plant";
 function nav(btn){
@@ -1039,6 +1316,7 @@ function nav(btn){
   $("pg-"+curPage).classList.add("active");
   if(curPage==="time") loadTimeStudy();
   if(curPage==="fleet") loadFleet();
+  if(curPage==="orders") loadOrders();
   if(curPage==="admin") loadAdmin();
 }
 
@@ -1329,6 +1607,8 @@ async function discoverScales(){
     return ra-rb || (a.name||'').localeCompare(b.name||'');
   });
   SCALES = keep;
+  try{ APP_MODE = localStorage.getItem("iss_mode") || APP_MODE; }catch(e){}
+  try{ applySiteCapabilities(); }catch(e){}
 }
 
 // 15-min rolling yield: product Δtotal ÷ feed Δtotal over the last 15 min (from the
@@ -1773,18 +2053,24 @@ function exportXLSX(){
 function durStr(m){ if(m==null||isNaN(m)) return "—"; m=Math.round(m); if(m<60) return m+"m"; return Math.floor(m/60)+"h "+String(m%60).padStart(2,'0')+"m"; }
 
 async function loadTrucks(){
+  loadWbLive();                       // fire and forget — the strip refreshes itself
   try{
-    const onsite=await sb("transactions?select=*&status=eq.open&order=time_in.asc&limit=50");
-    const complete=await sb("transactions?select=*&status=eq.complete&order=time_out.desc&limit=20");
+    // Scope to the site. RLS already limits a site login, but an admin sees
+    // every site, and mixing two weighbridges into one on-site list would be
+    // worse than useless.
+    const st=String(MY_SITE||plantSite()||"").trim();
+    const sf = st ? `&site=eq.${encodeURIComponent(st)}` : "";
+    const onsite=await sb("transactions?select=*&status=eq.open&order=time_in.asc&limit=50"+sf);
+    const complete=await sb("transactions?select=*&status=eq.complete&order=time_out.desc&limit=20"+sf);
     renderTrucks(onsite,complete);
     // today's totals (completed tickets since local midnight)
     const start=new Date(); start.setHours(0,0,0,0);
-    const today=await sb(`transactions?select=net,action,time_in,time_out&status=eq.complete&time_out=gte.${encodeURIComponent(start.toISOString())}`);
+    const today=await sb(`transactions?select=net,action,time_in,time_out&status=eq.complete&time_out=gte.${encodeURIComponent(start.toISOString())}`+sf);
     const trucksToday=today.length;
     const tonsToday=today.reduce((s,r)=>s+(parseFloat(r.net)||0),0);
     const tas=today.filter(r=>r.time_in&&r.time_out).map(r=>(new Date(r.time_out)-new Date(r.time_in))/60000).filter(v=>v>=0);
     const avgTa=tas.length ? tas.reduce((a,b)=>a+b,0)/tas.length : null;
-    const disp=today.filter(r=>/load/i.test(r.action||"")&&!/off/i.test(r.action||"")).length;
+    const disp=today.filter(r=>isDispatch(r.action)).length;
     const recv=trucksToday-disp;
     const el=$("trucksToday");
     if(el) el.innerHTML=`
@@ -1819,7 +2105,7 @@ function renderTrucks(onsite,recent){
     </div>`).join("") : '<div class="empty">No trucks on site</div>';
 
   $("trucksRecent").innerHTML = recent.length ? recent.slice(0,10).map(r=>{
-    const dispatch=/load/i.test(r.action||"")&&!/off/i.test(r.action||"");
+    const dispatch=isDispatch(r.action);
     return `<div class="card" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
       <div>
         <div style="font-size:16px;font-weight:900;font-family:'Courier New',monospace;letter-spacing:1.5px">${r.reg||"—"}</div>
@@ -1938,7 +2224,11 @@ async function startApp(session){
   if(!INTERVALS){ INTERVALS=true; setInterval(()=>{
     if(curPage==="reports") loadReports();
     if(curPage==="trucks")  loadTrucks();
-  },15000); }
+    if(curPage==="orders")  loadOrders();
+  },15000);
+  // The weighbridge reading moves while a truck is settling, so it gets its
+  // own faster tick — but only while that page is actually on screen.
+  setInterval(()=>{ if(curPage==="trucks") loadWbLive(); }, 4000); }
 }
 async function doLogin(){
   const u=($("luser").value||"").trim().toLowerCase();
