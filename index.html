@@ -1978,7 +1978,12 @@ async function genWeighbridge(from,to){
   q+=ilike("product",$("fProduct")?.value);
   let rows=[];
   try{ rows=await sb(q); }catch(e){}
-  REPORT={type:"wb", rows};
+  // A ticket voided at the bridge stays in the table but never counts here.
+  // Filtered in JS, not with status=neq.void, because a NULL status (older
+  // Cloud Sync rows) would silently drop out of a server-side inequality.
+  const nVoid=rows.filter(r=>String(r&&r.status||"").toLowerCase()==="void").length;
+  rows=rows.filter(r=>String(r&&r.status||"").toLowerCase()!=="void");
+  REPORT={type:"wb", rows, voided:nVoid};
   $("rptChart").innerHTML='';
   const body=rows.map(r=>{ const ti=r.time_in?new Date(r.time_in):null, tо=r.time_out?new Date(r.time_out):null;
     return `<tr><td>${ti?dLabel(ti.getTime()):'--'}</td><td>${ti?hLabel(ti):'--'}</td>
@@ -1989,7 +1994,7 @@ async function genWeighbridge(from,to){
   $("rptBody").innerHTML=`<div class="eyebrow">Transactions (${rows.length}) · ${fmt(totNet,1)} t net</div>
     <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>In</th><th>Ticket</th><th>Batch</th><th>Reg</th><th>Transporter</th><th>Customer</th><th>Product</th><th>Net t</th></tr></thead>
     <tbody>${body||'<tr><td colspan="9" class="empty">No transactions match</td></tr>'}</tbody></table></div>`;
-  $("rptStatus").textContent=`${rows.length} transaction(s)`;
+  $("rptStatus").textContent=`${rows.length} transaction(s)`+(nVoid?` · ${nVoid} voided ticket(s) excluded`:``);
 }
 
 function exportReportCSV(){
@@ -2044,6 +2049,7 @@ function exportXLSX(){
   if(REPORT.type==="wb"){
     // completed tickets only — trucks still on site never appear in the client's report
     const rows=(REPORT.rows||[]).filter(r=>r && r.status!=="open"
+      && String(r.status||"").toLowerCase()!=="void"
       && r.ticket!=null && String(r.ticket).trim()!=="");
     // newest ticket first, as the client's file is sorted
     rows.sort((a,b)=>{ const x=parseFloat(a.ticket), y=parseFloat(b.ticket);
