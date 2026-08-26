@@ -200,9 +200,14 @@ th{color:var(--muted);font-size:10px;font-weight:700;letter-spacing:.8px;text-tr
 .drawer .sub{font-size:12px;color:var(--muted);margin-bottom:14px}
 
 /* ── helpers ─────────────────────────────────────────────── */
+.of-l{display:block;font-size:11px;color:var(--muted);margin-bottom:4px;letter-spacing:.4px}
 .status-bar{font-size:11px;color:var(--muted);text-align:center;padding:8px 0}
-select,input{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px;font-family:inherit}
-input{width:100%}
+select,input,textarea{background:var(--panel);color:var(--ink);border:1px solid var(--gold);border-radius:8px;padding:8px 10px;font-size:13px;font-family:inherit}
+input,textarea{width:100%}
+textarea{resize:vertical}
+select:focus,input:focus,textarea:focus{outline:none;border-color:var(--gold2);box-shadow:0 0 0 2px rgba(201,168,76,.25)}
+input[type=file]{border:1px dashed var(--gold);padding:6px 8px}
+input[readonly]{border-color:var(--line);color:var(--muted)}
 .filter-row{display:flex;gap:8px;margin-bottom:14px;align-items:center;flex-wrap:wrap}
 
 /* ── weighbridge live weight ─────────────────────────────── */
@@ -426,6 +431,7 @@ input{width:100%}
         <option value="all">All orders</option>
         <option value="done">Completed</option>
       </select>
+      <button onclick="openOrderForm()" style="background:var(--gold);color:#12161c;border:0;border-radius:8px;padding:9px 14px;font-weight:800;font-size:13px;white-space:nowrap">+ New Order</button>
     </div>
     <div id="ordersList"><div class="empty">Loading…</div></div>
     <div class="status-bar" id="ordersStatus"></div>
@@ -597,6 +603,12 @@ function authHeaders(){ return { apikey:SB_KEY, Authorization:"Bearer "+ACCESS_T
 const $  = id => document.getElementById(id);
 const nz = v => (v==null||isNaN(Number(v))) ? 0 : Number(v);
 const fmt = (v,d=1) => nz(v).toLocaleString(undefined,{minimumFractionDigits:d,maximumFractionDigits:d});
+// Net weights are stored in KILOGRAMS. Everything a client reads is tonnes.
+// One helper, used everywhere, so the two never drift apart again.
+// Do NOT wrap a value that has already been divided by 1000 (the Excel
+// export at exportWB() converts on its own).
+const kgToT = kg => nz(kg)/1000;
+const fmtT  = (kg,d=2) => fmt(kgToT(kg),d);
 const hhmm = s => s ? new Date(s).toLocaleString([],{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}) : '—';
 
 async function sb(q){
@@ -617,7 +629,7 @@ async function sb(q){
 //  site login may only READ this table and every save comes back 403.
 //  fleetGate() says so in plain language instead of failing silently.
 // ════════════════════════════════════════════════════════════
-const DASH_BUILD="2026-08-23g";      // bump on every deploy
+const DASH_BUILD="2026-08-26a";      // bump on every deploy
 try{ console.log("ISS Remote Monitor — build "+DASH_BUILD); }catch(e){}
 let FLEET=[], FLEET_SITE="", FLEET_EDIT=null, FLEET_PENDING=null, FLEET_RO=false;
 
@@ -1136,7 +1148,10 @@ async function loadOrders(){
   $("ordersStatus").textContent=`${ORDERS.length} order${ORDERS.length!==1?"s":""} · ${site}`;
 }
 function orderPct(o){
-  const done=ORDER_TONS[String(o.order_no||"").trim()]||0;
+  // ORDER_TONS accumulates transactions.net, which is KILOGRAMS.
+  // tons_target is stored in TONNES. Comparing them raw was a 1000x error
+  // that showed every order as wildly over-delivered.
+  const done=kgToT(ORDER_TONS[String(o.order_no||"").trim()]||0);
   const target=Number(o.tons_target)||0;
   if(!target) return {done,target:0,pct:null};
   return {done,target,pct:Math.max(0,Math.min(999,(done/target)*100))};
@@ -1180,8 +1195,203 @@ function renderOrders(){
         <span>${over?`<b style="color:#f0c674">${fmt(p.done-p.target,1)} t over</b>`
                     :`${fmt(Math.max(0,p.target-p.done),1)} t remaining`}</span>
       </div>`}
+      <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+        <button onclick="showOrder('${esc(o.order_no)}')" style="flex:1;min-width:90px;background:none;border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:7px;font-size:12px">Tickets</button>
+        <button onclick="openOrderForm('${esc(o.order_no)}')" style="flex:1;min-width:70px;background:none;border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:7px;font-size:12px">Edit</button>
+        <button onclick="retireOrder('${esc(o.order_no)}',${o.active===false})" style="flex:1;min-width:70px;background:none;border:1px solid var(--gold);color:var(--gold);border-radius:8px;padding:7px;font-size:12px">${o.active===false?"Reopen":"Retire"}</button>
+        <button onclick="deleteOrder('${esc(o.order_no)}')" style="background:none;border:1px solid rgba(242,100,122,.4);color:var(--red);border-radius:8px;padding:7px 12px;font-size:12px">Delete</button>
+      </div>
     </div>`;
   }).join("");
+}
+
+// ── order create / edit ──────────────────────────────────────
+// Ported from the weighbridge app's openOrderModal so the two forms ask for
+// the same things. One difference on purpose: the target is entered in
+// TONNES here, not kilograms. tons_target is a tonnes column, the app
+// converts on the way in, and nobody types 500000 correctly on a phone.
+let ORDER_EDIT=null;
+function _odl(field){
+  const seen=new Set();
+  (ORDERS||[]).forEach(o=>{ const v=String(o[field]||"").trim(); if(v) seen.add(v); });
+  if(field==="transporter") (FLEET||[]).forEach(f=>{ const v=String(f.transporter||"").trim(); if(v) seen.add(v); });
+  return [...seen].sort().map(v=>`<option value="${esc(v)}"></option>`).join("");
+}
+function _hauliers(){
+  const c={};
+  (FLEET||[]).forEach(f=>{ const t=String(f.transporter||"").trim(); if(t) c[t]=(c[t]||0)+1; });
+  return Object.keys(c).sort().map(t=>`<option value="${esc(t)}">${esc(t)} (${c[t]})</option>`).join("");
+}
+function openOrderForm(no){
+  const o = no ? ORDERS.find(x=>String(x.order_no).trim()===String(no).trim()) : null;
+  ORDER_EDIT = o ? String(o.order_no) : null;
+  openDrawer(`
+    <h3>${o?"Edit order":"New order"}</h3>
+    <div class="sub">${o?esc(o.order_no):"Creates the order at site as well, on the next sync"}</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div><label class="of-l">Order number *</label>
+        <input id="ofNo" value="${esc(o?.order_no||"")}" placeholder="e.g. BCH010-SP/A41" ${o?"readonly":""}/></div>
+      <div><label class="of-l">Target (tonnes)</label>
+        <input id="ofTons" type="number" step="0.01" inputmode="decimal" value="${o?.tons_target??""}" placeholder="e.g. 500"/></div>
+      <div><label class="of-l">Customer</label>
+        <input id="ofCust" value="${esc(o?.customer||"")}" list="ofdC"/><datalist id="ofdC">${_odl("customer")}</datalist></div>
+      <div><label class="of-l">Product</label>
+        <input id="ofProd" value="${esc(o?.product||"")}" list="ofdP"/><datalist id="ofdP">${_odl("product")}</datalist></div>
+      <div><label class="of-l">Transporter</label>
+        <input id="ofTrans" value="${esc(o?.transporter||"")}" list="ofdT"/><datalist id="ofdT">${_odl("transporter")}</datalist></div>
+      <div><label class="of-l">Supplier</label>
+        <input id="ofSup" value="${esc(o?.supplier||"")}" list="ofdS"/><datalist id="ofdS">${_odl("supplier")}</datalist></div>
+      <div style="grid-column:1/-1"><label class="of-l">Destination</label>
+        <input id="ofDest" value="${esc(o?.destination||"")}" list="ofdD"/><datalist id="ofdD">${_odl("destination")}</datalist></div>
+    </div>
+    <label class="of-l" style="margin-top:14px">Fleet restriction — one registration per line (blank = any vehicle)</label>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+      <button onclick="document.getElementById('ofFile').click()" style="background:none;border:1px solid var(--gold);color:var(--gold);border-radius:8px;padding:7px 12px;font-size:12px">Import .xlsx / .csv</button>
+      <select style="flex:1;min-width:170px" onchange="addHaulierFleet(this.value);this.selectedIndex=0">
+        <option value="">+ Add a transporter's fleet…</option>${_hauliers()}
+      </select>
+      <button onclick="document.getElementById('ofFleet').value=''" style="background:none;border:1px solid var(--line);color:var(--muted);border-radius:8px;padding:7px 12px;font-size:12px">Clear</button>
+      <input type="file" id="ofFile" accept=".csv,.xlsx,.txt" style="display:none" onchange="orderFleetImport(this)"/>
+    </div>
+    <textarea id="ofFleet" rows="4" placeholder="One registration per line">${(Array.isArray(o?.fleet_regs)?o.fleet_regs:[]).join("\n")}</textarea>
+    <div id="ofMsg" style="font-size:12px;color:var(--red);margin-top:8px"></div>
+    <div style="display:flex;gap:8px;margin-top:14px">
+      <button onclick="closeDrawer()" style="background:none;border:1px solid var(--line);color:var(--muted);border-radius:9px;padding:11px 16px">Cancel</button>
+      <button id="ofSave" onclick="saveOrderForm()" style="flex:1;background:var(--gold);color:#12161c;border:0;border-radius:9px;padding:11px;font-weight:800">Save order</button>
+    </div>`);
+}
+function _ofRegs(){
+  return (($("ofFleet").value||"").split(/[\n,;]+/)
+    .map(r=>r.trim().toUpperCase().replace(/\s+/g," ")).filter(Boolean));
+}
+function addHaulierFleet(t){
+  if(!t) return;
+  const regs=(FLEET||[]).filter(f=>String(f.transporter||"").trim()===t)
+                        .map(f=>String(f.reg||"").trim().toUpperCase()).filter(Boolean);
+  const have=new Set(_ofRegs());
+  const add=regs.filter(r=>!have.has(r));
+  const ta=$("ofFleet");
+  ta.value=[..._ofRegs(),...add].join("\n");
+  $("ofMsg").style.color="var(--muted)";
+  $("ofMsg").textContent=add.length?`Added ${add.length} vehicle(s) from ${t}.`:`All of ${t}'s vehicles were already listed.`;
+}
+async function orderFleetImport(input){
+  const f=input.files&&input.files[0]; if(!f) return;
+  try{
+    let rows;
+    if(/\.xlsx$/i.test(f.name)) rows=await parseXLSX(await f.arrayBuffer());
+    else rows=parseCSVRows(await f.text());
+    rows=(rows||[]).filter(r=>r&&r.some(c=>String(c||"").trim()!==""));
+    if(!rows.length) throw new Error("that file is empty");
+    // Reuse the fleet importer's column detection so a Reg/Vehicle header is
+    // found wherever it sits; fall back to column A.
+    let map=_fCols(rows[0]), start=1;
+    if(map.reg<0){ map={reg:0}; start=0; }
+    else if(!F_HDRWORD.test(String(rows[0][map.reg]||"").trim())) start=0;
+    const have=new Set(_ofRegs()); const add=[];
+    for(let i=start;i<rows.length;i++){
+      const v=String((rows[i]||[])[map.reg]==null?"":rows[i][map.reg]).trim().toUpperCase().replace(/\s+/g," ");
+      if(!v||v.charAt(0)==="#"||F_HDRWORD.test(v)) continue;
+      if(have.has(v)) continue;
+      have.add(v); add.push(v);
+    }
+    if(!add.length) throw new Error("no new registrations found in that file");
+    $("ofFleet").value=[..._ofRegs(),...add].join("\n");
+    $("ofMsg").style.color="var(--muted)";
+    $("ofMsg").textContent=`Imported ${add.length} registration(s) from ${f.name}.`;
+  }catch(e){
+    $("ofMsg").style.color="var(--red)";
+    $("ofMsg").textContent="Could not import: "+e.message;
+  }
+  input.value="";
+}
+async function saveOrderForm(){
+  const no=($("ofNo").value||"").trim();
+  const msg=$("ofMsg"); msg.style.color="var(--red)";
+  if(!no){ msg.textContent="An order number is required."; return; }
+  if(!ORDER_EDIT && ORDERS.some(o=>String(o.order_no).trim().toLowerCase()===no.toLowerCase())){
+    msg.textContent="That order number already exists."; return; }
+  const site=String(MY_SITE||plantSite()||"").trim().toLowerCase();
+  if(!site){ msg.textContent="No site is set for this login."; return; }
+  const tons=parseFloat($("ofTons").value);
+  const regs=_ofRegs();
+  const row={ site, order_no:no,
+    customer:($("ofCust").value||"").trim()||null,
+    product:($("ofProd").value||"").trim()||null,
+    transporter:($("ofTrans").value||"").trim()||null,
+    supplier:($("ofSup").value||"").trim()||null,
+    destination:($("ofDest").value||"").trim()||null,
+    tons_target:isNaN(tons)?null:tons,
+    fleet_regs:regs.length?regs:null,
+    active:true, deleted:false, updated_at:new Date().toISOString() };
+  const btn=$("ofSave"); btn.disabled=true; btn.textContent="Saving…";
+  try{
+    // merge-duplicates on (site, order_no) — the same key the app upserts on,
+    // so an edit here and an edit at site converge instead of colliding.
+    await sbPost("orders?on_conflict=site,order_no", [row]);
+    closeDrawer(); await loadOrders();
+  }catch(e){
+    btn.disabled=false; btn.textContent="Save order";
+    msg.textContent="Could not save: "+e.message;
+  }
+}
+async function retireOrder(no,isClosed){
+  const o=ORDERS.find(x=>String(x.order_no).trim()===String(no).trim()); if(!o) return;
+  const verb=isClosed?"Reopen":"Retire";
+  if(!confirm(`${verb} order ${no}?\n\n${isClosed?"It goes back on the open list and returns to the operators' dropdown.":"It stays in the records and its tickets still resolve — it just leaves the open list."}`)) return;
+  try{
+    await sbPatch(`orders?site=eq.${encodeURIComponent(o.site)}&order_no=eq.${encodeURIComponent(no)}`,
+                  {active:isClosed, updated_at:new Date().toISOString()});
+    await loadOrders();
+  }catch(e){ alert("Could not update: "+e.message); }
+}
+async function deleteOrder(no){
+  const o=ORDERS.find(x=>String(x.order_no).trim()===String(no).trim()); if(!o) return;
+  const n=Math.abs(ORDER_TONS[String(no).trim()]||0)>0;
+  const warn = n
+    ? `\n\nThis order already has tickets against it. Those tickets keep their order number and stay in every report — but the order will also disappear from the operators' dropdown at site on the next sync.`
+    : `\n\nIt will also disappear from the operators' dropdown at site on the next sync.`;
+  if(!confirm(`Delete order ${no}?${warn}`)) return;
+  try{
+    await sbPatch(`orders?site=eq.${encodeURIComponent(o.site)}&order_no=eq.${encodeURIComponent(no)}`,
+                  {deleted:true, updated_at:new Date().toISOString()});
+    await loadOrders();
+  }catch(e){ alert("Could not delete: "+e.message); }
+}
+
+// ── order detail: the trucks that ran against it ─────────────
+async function showOrder(no){
+  openDrawer(`<h3>${esc(no)}</h3><div class="sub">Loading tickets…</div>`);
+  const site=String(MY_SITE||plantSite()||"").trim();
+  const sf = site ? `&site=eq.${encodeURIComponent(site)}` : "";
+  let rows=[];
+  try{
+    rows=await sb(`transactions?select=*&order_no=eq.${encodeURIComponent(no)}&status=eq.complete`+sf+`&order=time_out.desc&limit=500`);
+  }catch(e){
+    $("drawerContent").innerHTML=`<h3>${esc(no)}</h3><div class="empty">Could not load tickets (${esc(e.message)}).</div>`; return;
+  }
+  rows=rows.filter(r=>String(r&&r.status||"").toLowerCase()!=="void");
+  const o=ORDERS.find(x=>String(x.order_no).trim()===String(no).trim());
+  const disp=rows.filter(r=>isDispatch(r.action)), recv=rows.filter(r=>!isDispatch(r.action));
+  const sum=a=>a.reduce((t,r)=>t+nz(r.net),0);
+  const body=rows.length ? rows.map(r=>`<tr>
+      <td>${r.ticket||"--"}</td>
+      <td style="font-family:monospace">${esc(r.reg||"--")}</td>
+      <td>${esc(r.transporter||"--")}</td>
+      <td><span class="pill ${isDispatch(r.action)?"pill-d":"pill-r"}">${isDispatch(r.action)?"disp":"recv"}</span></td>
+      <td>${r.time_out?dLabel(new Date(r.time_out).getTime()):"--"}</td>
+      <td class="num">${fmtT(r.net)}</td></tr>`).join("")
+    : '<tr><td colspan="6" class="empty">No completed tickets against this order yet</td></tr>';
+  $("drawerContent").innerHTML=`
+    <h3>${esc(no)}</h3>
+    <div class="sub">${esc(o?.customer||"")}${o?.product?" · "+esc(o.product):""}${o?.destination?" → "+esc(o.destination):""}</div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px">
+      <div class="stat accent-cyan"><div class="stat-n num">${rows.length}</div><div class="stat-l">Loads</div></div>
+      <div class="stat accent-gold"><div class="stat-n num">${fmtT(sum(disp))}<span class="stat-u">t</span></div><div class="stat-l">Dispatched</div></div>
+      <div class="stat accent-green"><div class="stat-n num">${fmtT(sum(recv))}<span class="stat-u">t</span></div><div class="stat-l">Received</div></div>
+    </div>
+    <div class="tbl-wrap"><table><thead><tr><th>Ticket</th><th>Reg</th><th>Transporter</th><th></th><th>Date</th><th>Net t</th></tr></thead>
+    <tbody>${body}</tbody></table></div>`;
 }
 
 // ════════════════════════════════════════════════════════════
@@ -1989,9 +2199,9 @@ async function genWeighbridge(from,to){
     return `<tr><td>${ti?dLabel(ti.getTime()):'--'}</td><td>${ti?hLabel(ti):'--'}</td>
       <td>${r.ticket||'--'}</td><td>${r.batch_no||'--'}</td><td style="font-family:monospace">${r.reg||'--'}</td>
       <td>${r.transporter||'--'}</td><td>${r.customer||'--'}</td><td>${r.product||'--'}</td>
-      <td class="num">${r.net!=null?fmt(r.net):'--'}</td></tr>`; }).join("");
+      <td class="num">${r.net!=null?fmtT(r.net):'--'}</td></tr>`; }).join("");
   const totNet=rows.reduce((a,r)=>a+nz(r.net),0);
-  $("rptBody").innerHTML=`<div class="eyebrow">Transactions (${rows.length}) · ${fmt(totNet,1)} t net</div>
+  $("rptBody").innerHTML=`<div class="eyebrow">Transactions (${rows.length}) · ${fmtT(totNet)} t net</div>
     <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>In</th><th>Ticket</th><th>Batch</th><th>Reg</th><th>Transporter</th><th>Customer</th><th>Product</th><th>Net t</th></tr></thead>
     <tbody>${body||'<tr><td colspan="9" class="empty">No transactions match</td></tr>'}</tbody></table></div>`;
   $("rptStatus").textContent=`${rows.length} transaction(s)`+(nVoid?` · ${nVoid} voided ticket(s) excluded`:``);
@@ -2160,7 +2370,7 @@ async function loadTrucks(){
     const el=$("trucksToday");
     if(el) el.innerHTML=`
       <div class="stat accent-cyan"><div class="stat-n num">${trucksToday}</div><div class="stat-l">Trucks today</div></div>
-      <div class="stat accent-gold"><div class="stat-n num">${fmt(tonsToday,1)}<span class="stat-u">t</span></div><div class="stat-l">Tons moved today</div></div>
+      <div class="stat accent-gold"><div class="stat-n num">${fmtT(tonsToday)}<span class="stat-u">t</span></div><div class="stat-l">Tons moved today</div></div>
       <div class="stat accent-amber"><div class="stat-n num">${avgTa==null?'—':durStr(avgTa)}</div><div class="stat-l">Avg turnaround</div></div>
       <div class="stat accent-green"><div class="stat-n num">${onsite.length}</div><div class="stat-l">On site now</div></div>`;
     const sp=$("trucksSplit");
@@ -2198,7 +2408,7 @@ function renderTrucks(onsite,recent){
       </div>
       <div style="text-align:right">
         <span class="pill ${dispatch?"pill-d":"pill-r"}">${dispatch?"dispatch":"receive"}</span>
-        <div style="font-size:16px;font-weight:900;margin-top:4px" class="num">${r.net!=null?fmt(r.net)+" t":"—"}</div>
+        <div style="font-size:16px;font-weight:900;margin-top:4px" class="num">${r.net!=null?fmtT(r.net)+" t":"—"}</div>
         <div style="font-size:10px;color:var(--muted)">${hhmm(r.time_out)}</div>
         ${r.time_in&&r.time_out?`<div style="font-size:10px;color:var(--soft)">⏱ ${durStr((new Date(r.time_out)-new Date(r.time_in))/60000)}</div>`:""}
       </div>
