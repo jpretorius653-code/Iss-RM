@@ -735,7 +735,7 @@ async function sb(q){
 //  site login may only READ this table and every save comes back 403.
 //  fleetGate() says so in plain language instead of failing silently.
 // ════════════════════════════════════════════════════════════
-const DASH_BUILD="2026-08-26c";      // bump on every deploy
+const DASH_BUILD="2026-08-27c";      // bump on every deploy
 try{ console.log("ISS Remote Monitor — build "+DASH_BUILD); }catch(e){}
 let FLEET=[], FLEET_SITE="", FLEET_EDIT=null, FLEET_PENDING=null, FLEET_RO=false;
 
@@ -2391,7 +2391,80 @@ function wbTimeSerial(d){
   return (d.getHours()*3600 + d.getMinutes()*60 + d.getSeconds())/86400;
 }
 function wbTxt(v){ const s=(v==null?"":String(v)).trim(); return s||null; }
+/* The Action column prints a word, not the raw column value. A connected
+   bridge writes "dispatch"/"receive"; Cloud Sync writes "Loading"/"Off
+   Loading". Both are normalised here so one client's report never reads in
+   two vocabularies.
+
+   The wording is per site, because it is the client's word, not ours.
+   Hillside has read Loading / Off Loading since the first report and keeps
+   it — every existing Hillside row already carries those exact strings, so
+   its export is unchanged to the character. New sites get Dispatch /
+   Receive, matching what the app now prints on the ticket. Add a line here
+   when a site wants its own wording; anything the rules do not recognise is
+   passed through untouched, because an unfamiliar word beats a wrong one. */
+const WB_ACTION_DEFAULT={dispatch:"Dispatch", receive:"Receive"};
+const WB_ACTION_WORDS={
+  hillside: {dispatch:"Loading", receive:"Off Loading"}
+};
+function wbAction(v, site){
+  const s=wbTxt(v); if(!s) return null;
+  const a=s.toLowerCase();
+  if(!(a.startsWith("dispatch")||a.startsWith("receive")||/load/.test(a))) return s;
+  const w=WB_ACTION_WORDS[String(site||"").trim().toLowerCase()] || WB_ACTION_DEFAULT;
+  return isDispatch(s) ? w.dispatch : w.receive;
+}
 function wbNum(v){ const n=parseFloat(v); return isFinite(n)?n:null; }
+/* ── report layout ────────────────────────────────────────────────────────
+   The remote report is a copy of the one the weighbridge software prints on
+   site, so a client holding both sees the same file: 24 columns, blank
+   spacer at B, Empty / Full / Net after Reg, Destination after the dispatch
+   ticket, tonnes to three decimals, and the ticket dated by when it
+   completed rather than when it arrived.
+
+   Hillside is the exception. It has been sent the 23-column file since the
+   first report — Destination at B, Time Out after Batch No, two decimals,
+   dated on arrival — and stays on it. Remove its line from WB_SITE_LAYOUTS
+   and it joins everything else. A site not listed gets the app layout, so a
+   new client needs no code change.
+
+   Each column is [header, key, width]. The keys are what the row builder
+   fills, so a layout is only ever a re-ordering — no column can go missing
+   by editing this table. */
+const WB_COLS_APP=[
+  ["Ticket","ticket",10],["","blank",4],["Customer","customer",18],["Product","product",18],
+  ["Action","action",12],["Date","date",11],["Time In","time_in",8],["Time Out","time_out",8],
+  ["Reg","reg",12],["Empty Weight (kg)","empty",16],["Full Weight (kg)","full",15],
+  ["Net (kg)","net",11],["Batch No","batch",13],["Dispatch Ticket Nr","disp",17],
+  ["Destination","destination",14],["Transporter","transporter",14],["Order","order",15],
+  ["Trailer 1","trl1",11],["Trailer 2","trl2",11],["Seal No","seal",12],["Bridge","bridge",9],
+  ["Operator","operator",12],["Driver","driver",14],["Supplier","supplier",16]
+];
+const WB_COLS_HILLSIDE=[
+  ["Ticket","ticket",10],["Destination","destination",13],["Customer","customer",12],
+  ["Product","product",18],["Action","action",12],["Date","date",11],["Time In","time_in",8],
+  ["Reg","reg",12],["Empty Weight (kg)","empty",16],["Full Weight (kg)","full",15],
+  ["Net (kg)","net",11],["Batch No","batch",13],["Time Out","time_out",8],
+  ["Dispatch Ticket Nr","disp",17],["Transporter","transporter",13],["Order","order",15],
+  ["Trailer 1","trl1",11],["Trailer 2","trl2",11],["Seal No","seal",16],["Bridge","bridge",9],
+  ["Operator","operator",11],["Driver","driver",14],["Supplier","supplier",13]
+];
+const WB_LAYOUT_APP={
+  cols:WB_COLS_APP, dateFrom:"time_out", dateFmt:"yyyy/mm/dd", dp:3,
+  siteAsName:true, prodNetCol:true, sortProd:true,
+  // same stamp the app writes: 27/08/2026, 14:21
+  genLocale:"en-ZA", genOpts:{hour12:false,day:"2-digit",month:"2-digit",
+    year:"numeric",hour:"2-digit",minute:"2-digit"}
+};
+const WB_LAYOUT_HILLSIDE={
+  cols:WB_COLS_HILLSIDE, dateFrom:"time_in", dateFmt:"mm-dd-yy", dp:2,
+  siteAsName:false, prodNetCol:false, sortProd:false,
+  genLocale:"en-GB", genOpts:undefined
+};
+const WB_SITE_LAYOUTS={ hillside: WB_LAYOUT_HILLSIDE };
+function wbLayout(site){
+  return WB_SITE_LAYOUTS[String(site||"").trim().toLowerCase()] || WB_LAYOUT_APP;
+}
 function exportXLSX(){
   if(!REPORT){ alert("Generate a report first."); return; }
   if(typeof XLSX==="undefined"){ alert("Excel library still loading — try again in a moment."); return; }
@@ -2405,16 +2478,16 @@ function exportXLSX(){
     rows.sort((a,b)=>{ const x=parseFloat(a.ticket), y=parseFloat(b.ticket);
       return (isFinite(x)&&isFinite(y)) ? y-x : String(b.ticket).localeCompare(String(a.ticket)); });
     const site = (rows.find(r=>r.site)||(REPORT.rows||[])[0]||{}).site || "";
+    const L=wbLayout(site);
+    const HEAD=L.cols.map(c=>c[0]);
+    const K={}; L.cols.forEach((c,i)=>{ K[c[1]]=i; });   // key -> column index
     const from = $("rFrom").value||"", to = $("rTo").value||"";
     const aoa=[], typed=[];   // typed = real date/time cells patched in after
     aoa.push([(WB_SITE_TITLES[site.toLowerCase()]||site)+" Weighbridge — Records Report"]);
-    aoa.push(["Site", site]);
-    aoa.push(["Period", from+" to "+to]);
-    aoa.push(["Generated", new Date().toLocaleString('en-GB')]);
+    aoa.push(["Site", L.siteAsName ? (WB_SITE_TITLES[site.toLowerCase()]||site) : site]);
+    aoa.push(["Period", (from||"start")+" to "+(to||"today")]);
+    aoa.push(["Generated", new Date().toLocaleString(L.genLocale, L.genOpts)]);
     aoa.push([]);
-    const HEAD=["Ticket","Destination","Customer","Product","Action","Date","Time In","Reg",
-      "Empty Weight (kg)","Full Weight (kg)","Net (kg)","Batch No","Time Out","Dispatch Ticket Nr",
-      "Transporter","Order","Trailer 1","Trailer 2","Seal No","Bridge","Operator","Driver","Supplier"];
     aoa.push(HEAD);
     let totNet=0; const byProd={};
     rows.forEach(r=>{
@@ -2422,49 +2495,59 @@ function exportXLSX(){
       const ti=r.time_in?new Date(r.time_in):null, to_=r.time_out?new Date(r.time_out):null;
       const net=wbNum(r.net);
       if(net!=null){ totNet+=net; const p=wbTxt(r.product)||"(none)"; byProd[p]=(byProd[p]||0)+net; }
-      const line=new Array(HEAD.length).fill(null);
-      line[0]  = /^\d+$/.test(String(r.ticket).trim()) ? parseInt(r.ticket,10) : wbTxt(r.ticket);
-      line[1]  = wbTxt(r.destination);
-      line[2]  = wbTxt(r.customer);
-      line[3]  = wbTxt(r.product);
-      line[4]  = wbTxt(r.action);
-      line[7]  = wbTxt(r.reg);
-      line[8]  = wbNum(r.empty_weight);
-      line[9]  = wbNum(r.full_weight);
-      line[10] = net;
-      line[11] = wbTxt(r.batch_no);
-      line[13] = wbTxt(r.dispatch_ticket);
-      line[14] = wbTxt(r.transporter);
-      line[15] = wbOrderNo(r.order_no);      // order NUMBER, never the internal id
-      line[16] = wbTxt(r.trailer1);
-      line[17] = wbTxt(r.trailer2);
-      line[18] = wbTxt(r.seal_no);
-      line[19] = wbTxt(r.bridge);
-      line[20] = wbTxt(r.operator);
-      line[21] = wbTxt(r.driver);
-      line[22] = wbTxt(r.supplier);
-      aoa.push(line);
-      if(ti && !isNaN(ti)){
-        typed.push({r:rIdx,c:5, v:wbDateSerial(ti), z:"mm-dd-yy"});   // Date
-        typed.push({r:rIdx,c:6, v:wbTimeSerial(ti), z:"h:mm"});       // Time In
-      }
-      if(to_ && !isNaN(to_)) typed.push({r:rIdx,c:12, v:wbTimeSerial(to_), z:"h:mm"});  // Time Out
+      // Every column the report can hold, by key. The layout decides the
+      // order; date and the two times are left null and patched in below as
+      // real Excel cells rather than text.
+      const v={
+        ticket: /^\d+$/.test(String(r.ticket).trim()) ? parseInt(r.ticket,10) : wbTxt(r.ticket),
+        blank: null, date: null, time_in: null, time_out: null,
+        customer: wbTxt(r.customer),
+        product: wbTxt(r.product),
+        action: wbAction(r.action, r.site||site),
+        reg: wbTxt(r.reg),
+        empty: wbNum(r.empty_weight),
+        full: wbNum(r.full_weight),
+        net: net,
+        batch: wbTxt(r.batch_no),
+        disp: wbTxt(r.dispatch_ticket),
+        destination: wbTxt(r.destination),
+        transporter: wbTxt(r.transporter),
+        order: wbOrderNo(r.order_no),          // order NUMBER, never the internal id
+        trl1: wbTxt(r.trailer1),
+        trl2: wbTxt(r.trailer2),
+        seal: wbTxt(r.seal_no),
+        bridge: wbTxt(r.bridge),
+        operator: wbTxt(r.operator),
+        driver: wbTxt(r.driver),
+        supplier: wbTxt(r.supplier)
+      };
+      aoa.push(L.cols.map(c=>v[c[1]]));
+      // The app dates a ticket by when it completed, so a truck that weighs
+      // out after midnight lands on the new day. Falls back to time in when
+      // a row has no time out.
+      const dsrc=(L.dateFrom==="time_out") ? (to_||ti) : ti;
+      if(dsrc && !isNaN(dsrc)) typed.push({r:rIdx,c:K.date,     v:wbDateSerial(dsrc), z:L.dateFmt});
+      if(ti   && !isNaN(ti))   typed.push({r:rIdx,c:K.time_in,  v:wbTimeSerial(ti),   z:"h:mm"});
+      if(to_  && !isNaN(to_))  typed.push({r:rIdx,c:K.time_out, v:wbTimeSerial(to_),  z:"h:mm"});
     });
     const totRow=new Array(HEAD.length).fill(null);
-    totRow[0]="TOTAL"; totRow[7]=rows.length+" loads"; totRow[10]=totNet;
+    totRow[0]="TOTAL"; totRow[K.reg]=rows.length+" loads"; totRow[K.net]=totNet;
     aoa.push(totRow);
     const tonRow=new Array(HEAD.length).fill(null);
-    tonRow[9]="Net tonnes"; tonRow[10]=+(totNet/1000).toFixed(2);
+    tonRow[K.net-1]="Net tonnes"; tonRow[K.net]=+(totNet/1000).toFixed(L.dp);
     aoa.push(tonRow);
     aoa.push([]);
-    aoa.push(["Product Summary",null,"Tonnes"]);
-    Object.entries(byProd).forEach(([p,kg])=>aoa.push([p,null,+(kg/1000).toFixed(2)]));
+    aoa.push(["Product Summary", L.prodNetCol?"Net (kg)":null, "Tonnes"]);
+    const prods=Object.entries(byProd);
+    if(L.sortProd) prods.sort((a,b)=>b[1]-a[1]);
+    prods.forEach(([p,kg])=>aoa.push([p, L.prodNetCol?kg:null, +(kg/1000).toFixed(L.dp)]));
     const ws=XLSX.utils.aoa_to_sheet(aoa);
     typed.forEach(c=>{ ws[XLSX.utils.encode_cell({r:c.r,c:c.c})]={t:"n",v:c.v,z:c.z}; });
     Object.keys(ws).forEach(k=>{ if(k[0]!=="!" && ws[k] && ws[k].t==="s" && ws[k].v==="") delete ws[k]; });
-    ws['!cols']=HEAD.map((h,i)=>({wch: [10,13,12,18,12,11,8,12,16,15,11,13,8,17,13,15,11,11,16,9,11,14,13][i]||12}));
+    ws['!cols']=L.cols.map(c=>({wch:c[2]||12}));
     XLSX.utils.book_append_sheet(wb, ws, safeSheet("REPORT Records-"+from+"_"+to));
     XLSX.writeFile(wb, "REPORT Records-"+from+"_"+to+".xlsx");
+
   } else {
     REPORT.belts.forEach(s=>{
       const aoa=[["Date","Hour","Shift","Opening t","Closing t","Tons"]];
