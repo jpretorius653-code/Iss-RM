@@ -271,6 +271,7 @@ html,body{height:100%;background:var(--bg);color:var(--ink);
 .dot{width:8px;height:8px;border-radius:50%;display:inline-block}
 .dot-on{background:var(--green);box-shadow:0 0 6px var(--green)}
 .dot-mo{background:var(--amber);animation:pulse .55s infinite alternate}
+.dot-idle{background:var(--amber);box-shadow:0 0 6px rgba(224,169,74,.5)}
 .dot-off{background:var(--red)}
 @keyframes pulse{from{opacity:1}to{opacity:.3}}
 
@@ -748,7 +749,7 @@ async function sb(q){
 //  site login may only READ this table and every save comes back 403.
 //  fleetGate() says so in plain language instead of failing silently.
 // ════════════════════════════════════════════════════════════
-const DASH_BUILD="2026-08-27d";      // bump on every deploy
+const DASH_BUILD="2026-08-27f";      // bump on every deploy
 try{ console.log("ISS Remote Monitor — build "+DASH_BUILD); }catch(e){}
 let FLEET=[], FLEET_SITE="", FLEET_EDIT=null, FLEET_PENDING=null, FLEET_RO=false;
 
@@ -1946,12 +1947,17 @@ function ageSec(ts){ return ts ? (Date.now()-new Date(ts).getTime())/1000 : 9999
 // belt or weighbridge is idle and posting no data. The heartbeat controls
 // the pill ONLY; it is never displayed as scale rate/weight/total data.
 const GW_ONLINE_SEC = 90;          // 3 missed 30s beats = offline
-let gwAliveBySite = {};            // site -> bool (recent heartbeat?)
+let gwAliveBySite = {};            // site (lowercased) -> bool
 let gwAliveAny    = false;         // any gateway alive (single-site fallback)
+let gwSiteCount   = 0;             // how many sites have a gateway registered
 
 function gatewayOnline(site){
-  if(site && gwAliveBySite[site]!==undefined) return gwAliveBySite[site];
-  return gwAliveAny;
+  const k=String(site||"").trim().toLowerCase();
+  if(k && gwAliveBySite[k]!==undefined) return gwAliveBySite[k];
+  // The "any gateway" fallback is only safe while there is nothing to
+  // confuse it with. With two sites on the dashboard, one site's gateway
+  // must never vouch for another site's boards.
+  return (gwSiteCount<=1) ? gwAliveAny : false;
 }
 
 function guessRole(name){
@@ -1963,23 +1969,51 @@ function guessRole(name){
 }
 
 const ONLINE_SEC = 90;   // board posts every ~5s; ~18 missed = offline
-function isOnline(r,s){ return !(s&&s.retired) && ageSec(r&&r.ts) <= ONLINE_SEC; }
-function dotClass(r,s){ return isOnline(r,s) ? "dot-on" : "dot-off"; }
-function statusText(r,s){
+/* Three states, not two. A belt scale that is powered but stopped posts no
+   readings, so judging it on its own data alone painted a healthy plant
+   entirely red — which is what the gateway heartbeat was added for and then
+   never actually wired to.
+     live    this board posted within ONLINE_SEC
+     idle    no fresh data, but its gateway is still beating — powered, stopped
+     offline nothing from the board and nothing from its gateway
+   Idle shows no rate or speed: a reading minutes old is not the current
+   rate, and a stale number presented as live is worse than a dash. */
+function scaleState(r,s){
   if(s && s.retired) return "retired";
-  if(isOnline(r,s))  return (r && r.stable===false) ? "moving" : "live";
-  if(!r) return "offline · no data";
+  if(ageSec(r&&r.ts) <= ONLINE_SEC) return "live";
+  return gatewayOnline(s&&s.site) ? "idle" : "offline";
+}
+function isOnline(r,s){ return scaleState(r,s)==="live"; }
+function dotClass(r,s){
+  const st=scaleState(r,s);
+  return st==="live" ? "dot-on" : (st==="idle" ? "dot-idle" : "dot-off");
+}
+function agoStr(r){
+  if(!r || !r.ts) return null;
   const a=ageSec(r.ts);
-  const ago = a<3600 ? Math.round(a/60)+"m" : Math.round(a/3600)+"h";
-  return "offline · last seen "+ago+" ago";
+  return a<3600 ? Math.round(a/60)+"m" : Math.round(a/3600)+"h";
+}
+function statusText(r,s){
+  const st=scaleState(r,s);
+  if(st==="retired") return "retired";
+  if(st==="live")    return (r && r.stable===false) ? "moving" : "live";
+  const ago=agoStr(r);
+  if(st==="idle")    return ago ? ("idle · gateway live · last data "+ago+" ago")
+                                : "idle · gateway live · no data yet";
+  return ago ? ("offline · last seen "+ago+" ago") : "offline · no data";
 }
 
 function scaleCardHTML(s){
   const r = state[s.device];
-  const on = isOnline(r,s);
+  const stt = scaleState(r,s);
+  // Values are only shown while genuinely live, so a null reading can never
+  // reach r.rate below.
+  const on = (stt==="live") && !!r;
   const dc = dotClass(r,s), st = statusText(r,s);
   const siteTag = (s.site && s.site!=="") ? `<span style="font-size:10px;color:var(--muted)">${s.site}</span>` : '';
-  const border = on ? 'var(--line)' : 'var(--red)';
+  // Red is for a board nobody can reach. A stopped belt on a live gateway is
+  // amber — it needs no callout.
+  const border = (stt==="live") ? 'var(--line)' : (stt==="idle" ? 'var(--amber)' : 'var(--red)');
   if(s.role==="weighbridge"){
     return `<div class="scale-card" style="border-color:${border}" onclick="showScaleHistory('${s.device}','${s.name}')">
       <div class="sc-name"><span class="sc-title">${s.name}</span><span class="sc-right">${siteTag}<span class="dot ${dc}"></span></span></div>
@@ -1999,13 +2033,33 @@ function scaleCardHTML(s){
 }
 
 let IS_ADMIN=false, MY_SITE=null, ALL_SITES=["Hillside","Primecoal"];
+let SCALES_ERR=null;
+/* A scale grid with nothing in it used to render as an empty div — no
+   heading, no reason, nothing to act on. Each way of ending up empty has a
+   different fix, so each one says which it is. */
+function scalesEmptyHTML(kind){
+  if(SCALES_ERR)
+    return `<div class="empty">Scale registry did not load — ${esc(SCALES_ERR)}<br>
+      <span style="color:var(--muted);font-size:11px">The dashboard is reading the boards, not the readings.
+      A 401/403 here is a login or RLS problem, not a dead gateway.</span></div>`;
+  if(!SCALES.length)
+    return `<div class="empty">No scales visible for this login.<br>
+      <span style="color:var(--muted);font-size:11px">In Admin, check every board is allocated to a site —
+      an unallocated board is hidden from every client login.</span></div>`;
+  const site=esc(MY_SITE||plantSite()||"this site");
+  if(kind==="belt")
+    return `<div class="empty">No belt scales for ${site} — every board here is a weighbridge or gateway.</div>`;
+  return `<div class="empty">No scales for ${site}.</div>`;
+}
 
 async function discoverScales(){
   // Scales now come from the server-side registry. RLS returns only what this
   // login may see: a client gets their allocated site; admin gets everything.
   let rows;
-  try{ rows = await sb("scales?select=*&order=display_name.asc"); }
-  catch(e){ return; }
+  try{ rows = await sb("scales?select=*&order=display_name.asc"); SCALES_ERR=null; }
+  // Swallowing this left the Live scales panel silently blank, which looks
+  // identical to a site that owns no belt scales. Keep the reason and say it.
+  catch(e){ SCALES_ERR=String((e&&e.message)||e); return; }
   const keep = [];
   const siteset = new Set(ALL_SITES);
   for(const s of rows){
@@ -2077,12 +2131,16 @@ async function refreshScales(){
   // ── recompute gateway liveness → drives every scale's online/offline pill ──
   gwAliveBySite = {}; gwAliveAny = false;
   for(const g of SCALES.filter(x=>x.role==="gateway")){
-    if(g.site && gwAliveBySite[g.site]===undefined) gwAliveBySite[g.site]=false;
+    // Keys are lowercased: a registry row saying "Hillside" and a scale row
+    // saying "hillside" are the same weighbridge yard.
+    const k = String(g.site||"").trim().toLowerCase();
+    if(k && gwAliveBySite[k]===undefined) gwAliveBySite[k]=false;
     if(ageSec(state[g.device] && state[g.device].ts) <= GW_ONLINE_SEC){
       gwAliveAny = true;
-      if(g.site) gwAliveBySite[g.site]=true;
+      if(k) gwAliveBySite[k]=true;
     }
   }
+  gwSiteCount = Object.keys(gwAliveBySite).length;
 
   // plant page — roles assigned per scale in Admin (feed / product / discard)
   const feed = SCALES.filter(s=>s.role==="feed").reduce((a,s)=>a+nz(state[s.device]?.rate),0);
@@ -2090,8 +2148,10 @@ async function refreshScales(){
   $("pFeed").textContent = fmt(feed);   // live rate (from readings)
   refreshYield15();                      // 15-min rolling yield beside the feed number
   // Yield tiles are set from the permanent hourly ledger in refreshPlantHourly()
-  $("plantScales").innerHTML = SCALES.filter(s=>s.role!=="weighbridge"&&s.role!=="gateway").map(scaleCardHTML).join("");
-  $("allScales").innerHTML = SCALES.filter(s=>s.role!=="gateway").map(scaleCardHTML).join("");
+  $("plantScales").innerHTML = SCALES.filter(s=>s.role!=="weighbridge"&&s.role!=="gateway").map(scaleCardHTML).join("")
+    || scalesEmptyHTML("belt");
+  $("allScales").innerHTML = SCALES.filter(s=>s.role!=="gateway").map(scaleCardHTML).join("")
+    || scalesEmptyHTML("all");
   const gwEl=$("allGateways"); if(gwEl) gwEl.innerHTML=SCALES.filter(s=>s.role==="gateway").map(scaleCardHTML).join("") || '<div class="empty" style="font-size:12px">No gateway heartbeat yet — reflash firmware</div>';
 
   // weighbridge card
