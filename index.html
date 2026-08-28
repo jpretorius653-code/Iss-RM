@@ -272,6 +272,19 @@ html,body{height:100%;background:var(--bg);color:var(--ink);
 .dot-on{background:var(--green);box-shadow:0 0 6px var(--green)}
 .dot-mo{background:var(--amber);animation:pulse .55s infinite alternate}
 .dot-idle{background:var(--amber);box-shadow:0 0 6px rgba(224,169,74,.5)}
+/* ── admin site chooser ──────────────────────────────────── */
+.site-pick{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:10px;margin-bottom:16px}
+.site-btn{background:linear-gradient(152deg,var(--raise),var(--card));border:1px solid var(--line);
+  border-radius:12px;padding:13px 12px;text-align:left;cursor:pointer;color:var(--ink);font:inherit;
+  position:relative;overflow:hidden}
+.site-btn b{display:block;font-size:15px;font-weight:800;letter-spacing:.2px;line-height:1.2}
+.site-btn small{display:block;font-size:11px;color:var(--muted);margin-top:4px;
+  font-family:'Courier New',monospace;letter-spacing:.5px}
+.site-btn:hover{border-color:rgba(41,171,226,.45)}
+.site-btn:active{transform:scale(.985)}
+.site-btn.on{border-color:var(--cyan)}
+.site-btn.on:before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--cyan)}
+.site-btn.on small{color:var(--cyan)}
 .dot-off{background:var(--red)}
 @keyframes pulse{from{opacity:1}to{opacity:.3}}
 
@@ -618,6 +631,13 @@ input[readonly]{border-color:var(--line);color:var(--muted)}
   </div>
 
   <div class="page" id="pg-admin">
+    <div class="eyebrow">Site access</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:10px">
+      Choose the site to work in. Every tab — trucks, plant, reports, orders, fleet — is then scoped to it,
+      the same view that site's own login gets. Your admin rights do not change; this only decides what you are looking at.
+    </div>
+    <div id="adminSites" class="site-pick"><div class="empty">Loading…</div></div>
+
     <div class="eyebrow">Sites</div>
     <div style="font-size:12px;color:var(--muted);margin-bottom:10px">
       A site code is what ties a weighbridge, its tickets and its logins together.
@@ -654,6 +674,33 @@ input[readonly]{border-color:var(--line);color:var(--muted)}
       <button class="fbtn pri" style="margin-top:10px" onclick="adminLinkUser()">Link login to site</button>
     </div>
     <div id="usersList"></div>
+
+    <div class="eyebrow">Customer logins</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:10px">
+      A customer login sees one site and only the tickets and orders carrying its own customer name —
+      no plant, no fleet, no other customer. Pick the name from the list rather than typing it:
+      it must match what the operator selects at the bridge, character for character.
+    </div>
+    <div class="card" style="margin-bottom:12px">
+      <div class="f-grid">
+        <div><div class="f-lbl">Login email *</div>
+          <input id="acEmail" placeholder="aes@rietcoal.co.za" autocapitalize="off" spellcheck="false"/></div>
+        <div><div class="f-lbl">Password * (10+ characters)</div>
+          <input id="acPass" type="text" placeholder="hand this to the customer" autocapitalize="off" spellcheck="false"/></div>
+      </div>
+      <div class="f-grid" style="margin-top:8px">
+        <div><div class="f-lbl">Site *</div>
+          <input id="acSite" list="alSites" placeholder="rietcoal" autocapitalize="off" spellcheck="false"/></div>
+        <div><div class="f-lbl">Customer *</div>
+          <input id="acCust" list="acCusts" placeholder="pick from the list" autocapitalize="off"/>
+          <datalist id="acCusts"></datalist></div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+        <button class="fbtn" onclick="acLoadCustomers()">Load customers for this site</button>
+        <button class="fbtn pri" onclick="adminCreateCustomer()">Create customer login</button>
+      </div>
+      <div id="acStatus" style="font-size:12px;color:var(--muted);margin-top:8px"></div>
+    </div>
 
     <div class="eyebrow">Scale management</div>
     <div style="font-size:12px;color:var(--muted);margin-bottom:10px">
@@ -749,7 +796,7 @@ async function sb(q){
 //  site login may only READ this table and every save comes back 403.
 //  fleetGate() says so in plain language instead of failing silently.
 // ════════════════════════════════════════════════════════════
-const DASH_BUILD="2026-08-27f";      // bump on every deploy
+const DASH_BUILD="2026-08-27h";      // bump on every deploy
 try{ console.log("ISS Remote Monitor — build "+DASH_BUILD); }catch(e){}
 let FLEET=[], FLEET_SITE="", FLEET_EDIT=null, FLEET_PENDING=null, FLEET_RO=false;
 
@@ -1607,8 +1654,29 @@ function siteHasBelt(site){
 /* Every tab is shown, except the ones about equipment this site does not
    have. No modes, no switch to find: a weighbridge-only site simply never
    sees the plant screens, and a site with belts sees everything. */
+const CUSTOMER_TABS = ["trucks","orders","reports"];
 function applySiteCapabilities(){
-  const show = IS_ADMIN || siteHasBelt(MY_SITE || plantSite());
+  // A customer gets their loads, their orders and their report. Nothing on
+  // the plant, the boards, the fleet or the admin tools is any of theirs.
+  if(isCustomer()){
+    document.querySelectorAll('.tab').forEach(btn=>{
+      btn.style.display = CUSTOMER_TABS.indexOf(btn.dataset.page)>=0 ? "" : "none";
+    });
+    const cur=document.querySelector('.tab[data-page="'+curPage+'"]');
+    if(cur && cur.style.display==="none"){
+      const to=document.querySelector('.tab[data-page="orders"]');
+      if(to) nav(to);
+    }
+    const rt=$("rType");
+    if(rt){
+      [...rt.options].forEach(o=>{ if(o.value==="belt") o.hidden=true; });
+      if(rt.value==="belt"){ rt.value="wb"; try{ toggleWbFilters(); }catch(e){} }
+    }
+    return;
+  }
+  // An admin viewing everything sees every tab; an admin who has picked a
+  // site is judged on that site, same as its own login would be.
+  const show = (IS_ADMIN && !MY_SITE) ? true : siteHasBelt(MY_SITE || plantSite());
   document.querySelectorAll('.tab').forEach(btn=>{
     const id=btn.dataset.page;
     if(id==="admin") return;                       // admin tab manages itself
@@ -1798,11 +1866,57 @@ async function loadAdminUsers(){
     <tbody>${(users||[]).map(u=>`<tr>
       <td>${esc(u.email)}${u.confirmed?"":' <span class="wb-flag wb-stale">unconfirmed</span>'}</td>
       <td>${u.site?esc(u.site):(u.is_admin?'<span style="color:#29ABE2">all sites</span>':'<span style="color:#f0c674">none</span>')}</td>
-      <td>${u.is_admin?"ISS admin":"site"}</td>
+      <td>${u.is_admin?"ISS admin":(u.customer?`<span style="color:var(--gold2)">customer</span><br><span style="font-size:11px;color:var(--muted)">${esc(u.customer)}</span>`:"site")}</td>
       <td>${u.last_sign_in?new Date(u.last_sign_in).toLocaleDateString():"never"}</td>
       <td style="text-align:right">${u.linked?`<button class="fbtn sm dngr" onclick="adminUnlink('${esc(u.email)}')">Unlink</button>`:""}</td>
     </tr>`).join("")}</tbody></table></div></div>`;
 }
+/* The names that actually appear on tickets at this site, commonest first.
+   Typing a customer by hand is how you create a login that matches nothing. */
+async function acLoadCustomers(){
+  const site=($("acSite").value||"").trim().toLowerCase();
+  const st=$("acStatus");
+  if(!site){ st.textContent="Type a site code first."; return; }
+  st.textContent="Loading customers at "+site+"…";
+  try{
+    const rows=await rpc("iss_site_customers",{p_site:site});
+    if(!rows || !rows.length){
+      st.textContent="No ticket at "+site+" names a customer yet.";
+      $("acCusts").innerHTML=""; return;
+    }
+    $("acCusts").innerHTML=rows.map(r=>`<option value="${esc(r.customer)}">${r.tickets} tickets</option>`).join("");
+    st.textContent=rows.length+" customer"+(rows.length===1?"":"s")+" found — pick one in the box.";
+  }catch(e){
+    st.textContent="Could not load customers: "+e.message;
+  }
+}
+
+async function adminCreateCustomer(){
+  const email=($("acEmail").value||"").trim().toLowerCase();
+  const pass =$("acPass").value||"";
+  const site =($("acSite").value||"").trim().toLowerCase();
+  const cust =($("acCust").value||"").trim();
+  const st=$("acStatus");
+  if(!email||!pass||!site||!cust){ st.textContent="Email, password, site and customer are all required."; return; }
+  if(pass.length<10){ st.textContent="Use at least 10 characters — these logins get shared around."; return; }
+  st.textContent="Creating…";
+  try{
+    const r=await fetch(SB_URL+"/functions/v1/admin-create-user",{
+      method:"POST",
+      headers:{ "Content-Type":"application/json", "Authorization":"Bearer "+ACCESS_TOKEN, "apikey":SB_KEY },
+      body:JSON.stringify({email,password:pass,site,customer:cust})
+    });
+    const out=await r.json().catch(()=>({error:"no response"}));
+    if(!r.ok || out.error){ st.textContent="Failed: "+(out.error||r.status); return; }
+    st.innerHTML=`<span style="color:var(--green)">${esc(email)} can now sign in and will see
+      ${esc(cust)} at ${esc(site)}${out.existing?" (login already existed — it was re-linked)":""}.</span>`;
+    $("acEmail").value=""; $("acPass").value=""; $("acCust").value="";
+    await loadSites();
+  }catch(e){
+    st.textContent="Failed: "+((e&&e.message)||e)+" — is the admin-create-user function deployed?";
+  }
+}
+
 async function adminLinkUser(){
   const email=($("alEmail").value||"").trim();
   const site=($("alSite").value||"").trim().toLowerCase();
@@ -1822,6 +1936,7 @@ async function adminUnlink(email){
 }
 
 async function loadAdmin(){
+  renderAdminSites();
   if(IS_ADMIN) loadSites();
   if(!IS_ADMIN){ $("adminList").innerHTML='<div class="empty">Admin only.</div>'; return; }
   let rows;
@@ -2033,7 +2148,56 @@ function scaleCardHTML(s){
 }
 
 let IS_ADMIN=false, MY_SITE=null, ALL_SITES=["Hillside","Primecoal"];
+/* A customer login: one site, one customer, read only. The rows are cut off
+   by RLS in Postgres — everything below only decides what is worth drawing.
+   Hiding a tab is not security and is not treated as any. */
+let MY_CUSTOMER=null;
+function isCustomer(){ return !!MY_CUSTOMER; }
 let SCALES_ERR=null;
+/* The site the dashboard is currently looking at. For a client login this is
+   their own site and RLS enforces it anyway; for an admin it is whichever
+   site they picked on the Admin tab, or empty for the whole estate. */
+function inScope(s){
+  const k=String(MY_SITE||"").trim().toLowerCase();
+  if(!k) return true;
+  return String((s&&s.site)||"").trim().toLowerCase()===k;
+}
+function scopedScales(){ return (SCALES||[]).filter(inScope); }
+
+/* Admin site chooser. The picked site is held in MY_SITE — the same field a
+   client login gets from my_access — so every query that was already scoped
+   follows it with no second notion of "current site" to keep in step. */
+async function renderAdminSites(){
+  const el=$("adminSites"); if(!el) return;
+  if(!IS_ADMIN){ el.innerHTML='<div class="empty">Admin only.</div>'; return; }
+  let opts=[];
+  try{ opts=await fleetSiteOptions(); }catch(e){ opts=[]; }
+  const cur=String(MY_SITE||"").trim().toLowerCase();
+  const btn=(code,label,sub)=>`<button class="site-btn${cur===code?" on":""}"
+      onclick="adminUseSite('${String(code).replace(/'/g,"\\'")}')">
+      <b>${esc(label)}</b><small>${esc(sub)}</small></button>`;
+  el.innerHTML = btn("", "All sites", cur===""?"viewing":"whole estate")
+    + opts.map(c=>btn(c, siteTitle(c)||c, cur===c ? "viewing" : c)).join("");
+}
+async function adminUseSite(code){
+  if(!IS_ADMIN) return;
+  const v=String(code||"").trim();
+  MY_SITE = v || null;
+  try{ v ? localStorage.setItem("iss_admin_site", v) : localStorage.removeItem("iss_admin_site"); }catch(e){}
+  // Fleet and orders keep their own lower-cased site key. Move it too, or the
+  // admin ends up reading one site's trucks against another site's fleet.
+  FLEET_SITE = v.toLowerCase();
+  try{ localStorage.setItem("iss_fleet_site", FLEET_SITE); }catch(e){}
+  // Drop the cached readings so nothing from the previous site survives the
+  // switch — a stale card is worse than a loading one.
+  Object.keys(state).forEach(k=>{ delete state[k]; });
+  setSiteBanner();
+  renderAdminSites();
+  try{ await discoverScales(); await refreshScales(); }catch(e){}
+  try{ applySiteCapabilities(); }catch(e){}
+  const to=document.querySelector('.tab[data-page="trucks"]');
+  if(to) nav(to);
+}
 /* A scale grid with nothing in it used to render as an empty div — no
    heading, no reason, nothing to act on. Each way of ending up empty has a
    different fix, so each one says which it is. */
@@ -2042,6 +2206,10 @@ function scalesEmptyHTML(kind){
     return `<div class="empty">Scale registry did not load — ${esc(SCALES_ERR)}<br>
       <span style="color:var(--muted);font-size:11px">The dashboard is reading the boards, not the readings.
       A 401/403 here is a login or RLS problem, not a dead gateway.</span></div>`;
+  if(SCALES.length && !scopedScales().length)
+    return `<div class="empty">No scales allocated to ${esc(siteTitle(MY_SITE)||MY_SITE)}.<br>
+      <span style="color:var(--muted);font-size:11px">Assign its boards under Scale management below,
+      or pick another site at the top of this tab.</span></div>`;
   if(!SCALES.length)
     return `<div class="empty">No scales visible for this login.<br>
       <span style="color:var(--muted);font-size:11px">In Admin, check every board is allocated to a site —
@@ -2094,7 +2262,7 @@ async function refreshYield15(){
   const el=$("pY15"); if(!el) return;
   if(Date.now()-Y15_LAST < 25000) return;
   Y15_LAST=Date.now();
-  const feeds=SCALES.filter(s=>s.role==="feed"), prods=SCALES.filter(s=>s.role==="product");
+  const feeds=scopedScales().filter(s=>s.role==="feed"), prods=scopedScales().filter(s=>s.role==="product");
   if(!feeds.length || !prods.length){ el.textContent="--"; return; }
   const since=new Date(Date.now()-15*60*1000).toISOString();
   // Average t/h over each stream's OWN sampled window, so a gappy feed (WiFi
@@ -2143,19 +2311,20 @@ async function refreshScales(){
   gwSiteCount = Object.keys(gwAliveBySite).length;
 
   // plant page — roles assigned per scale in Admin (feed / product / discard)
-  const feed = SCALES.filter(s=>s.role==="feed").reduce((a,s)=>a+nz(state[s.device]?.rate),0);
-  const prod = SCALES.filter(s=>s.role==="product").reduce((a,s)=>a+nz(state[s.device]?.rate),0);
+  const inView = scopedScales();
+  const feed = inView.filter(s=>s.role==="feed").reduce((a,s)=>a+nz(state[s.device]?.rate),0);
+  const prod = inView.filter(s=>s.role==="product").reduce((a,s)=>a+nz(state[s.device]?.rate),0);
   $("pFeed").textContent = fmt(feed);   // live rate (from readings)
   refreshYield15();                      // 15-min rolling yield beside the feed number
   // Yield tiles are set from the permanent hourly ledger in refreshPlantHourly()
-  $("plantScales").innerHTML = SCALES.filter(s=>s.role!=="weighbridge"&&s.role!=="gateway").map(scaleCardHTML).join("")
+  $("plantScales").innerHTML = inView.filter(s=>s.role!=="weighbridge"&&s.role!=="gateway").map(scaleCardHTML).join("")
     || scalesEmptyHTML("belt");
-  $("allScales").innerHTML = SCALES.filter(s=>s.role!=="gateway").map(scaleCardHTML).join("")
+  $("allScales").innerHTML = inView.filter(s=>s.role!=="gateway").map(scaleCardHTML).join("")
     || scalesEmptyHTML("all");
-  const gwEl=$("allGateways"); if(gwEl) gwEl.innerHTML=SCALES.filter(s=>s.role==="gateway").map(scaleCardHTML).join("") || '<div class="empty" style="font-size:12px">No gateway heartbeat yet — reflash firmware</div>';
+  const gwEl=$("allGateways"); if(gwEl) gwEl.innerHTML=inView.filter(s=>s.role==="gateway").map(scaleCardHTML).join("") || '<div class="empty" style="font-size:12px">No gateway heartbeat yet — reflash firmware</div>';
 
   // weighbridge card
-  const wbS = SCALES.find(s=>s.role==="weighbridge");
+  const wbS = inView.find(s=>s.role==="weighbridge");
   const wb = state[wbS?.device];
   if(wb){
     $("wbWeight").textContent = nz(wb.weight);
@@ -2175,7 +2344,7 @@ async function refreshScales(){
 }
 
 async function refreshPlantHourly(){
-  const belts=SCALES.filter(s=>["feed","product","discard"].includes(s.role));
+  const belts=scopedScales().filter(s=>["feed","product","discard"].includes(s.role));
   if(!belts.length){ $("plantHourly").innerHTML='<tr><td colspan="6" class="empty">Assign a Feed / Product scale in Admin</td></tr>'; return; }
   const since=new Date(Date.now()-48*3600*1000).toISOString();
   const per={};
@@ -2297,7 +2466,7 @@ async function genReport(){
 }
 
 async function genBelt(from,to){
-  const belts=SCALES.filter(s=>["feed","product","discard"].includes(s.role));
+  const belts=scopedScales().filter(s=>["feed","product","discard"].includes(s.role));
   if(!belts.length){ $("rptBody").innerHTML='<div class="empty">No belt scales assigned. Set roles in Admin.</div>'; return; }
   const fISO=from.toISOString(), tISO=to.toISOString();
   const per={};
@@ -2439,6 +2608,11 @@ function setSiteBanner(){
   const n=$("sbName"), sub=$("sbSub");
   if(!n) return;
   if(IS_ADMIN && !MY_SITE){ n.textContent="All Sites"; sub.textContent="ISS Administrator"; return; }
+  if(isCustomer()){
+    n.textContent = MY_CUSTOMER;
+    sub.textContent = siteTitle(MY_SITE) + " · order tracking";
+    return;
+  }
   const t=siteTitle(MY_SITE||plantSite());
   n.textContent = t || "\u00a0";
   sub.textContent = "Weighbridge & Plant Monitoring";
@@ -2536,8 +2710,25 @@ const WB_LAYOUT_HILLSIDE={
   siteAsName:false, prodNetCol:false, sortProd:false,
   genLocale:"en-GB", genOpts:undefined
 };
+/* A customer's own copy. Their name is on every row so it is not repeated,
+   and supplier, operator and bridge are left out — those are the site's
+   business, not the buyer's. Same builder, one shorter column list. */
+const WB_COLS_CUSTOMER=[
+  ["Ticket","ticket",10],["Date","date",11],["Time In","time_in",8],["Time Out","time_out",8],
+  ["Reg","reg",12],["Product","product",18],["Destination","destination",14],
+  ["Empty Weight (kg)","empty",16],["Full Weight (kg)","full",15],["Net (kg)","net",11],
+  ["Order","order",15],["Transporter","transporter",14],["Driver","driver",14],
+  ["Dispatch Ticket Nr","disp",17]
+];
+const WB_LAYOUT_CUSTOMER={
+  cols:WB_COLS_CUSTOMER, dateFrom:"time_out", dateFmt:"yyyy/mm/dd", dp:3,
+  siteAsName:true, prodNetCol:true, sortProd:true,
+  genLocale:"en-ZA", genOpts:{hour12:false,day:"2-digit",month:"2-digit",
+    year:"numeric",hour:"2-digit",minute:"2-digit"}
+};
 const WB_SITE_LAYOUTS={ hillside: WB_LAYOUT_HILLSIDE };
 function wbLayout(site){
+  if(isCustomer()) return WB_LAYOUT_CUSTOMER;
   return WB_SITE_LAYOUTS[String(site||"").trim().toLowerCase()] || WB_LAYOUT_APP;
 }
 function exportXLSX(){
@@ -2560,6 +2751,7 @@ function exportXLSX(){
     const aoa=[], typed=[];   // typed = real date/time cells patched in after
     aoa.push([(WB_SITE_TITLES[site.toLowerCase()]||site)+" Weighbridge — Records Report"]);
     aoa.push(["Site", L.siteAsName ? (WB_SITE_TITLES[site.toLowerCase()]||site) : site]);
+    if(isCustomer()) aoa.push(["Customer", MY_CUSTOMER]);
     aoa.push(["Period", (from||"start")+" to "+(to||"today")]);
     aoa.push(["Generated", new Date().toLocaleString(L.genLocale, L.genOpts)]);
     aoa.push([]);
@@ -2671,16 +2863,19 @@ async function loadTrucks(){
     const avgTa=tas.length ? tas.reduce((a,b)=>a+b,0)/tas.length : null;
     const disp=dispRows.length, recv=recvRows.length;
     const el=$("trucksToday");
+    // The breakdown splits the day by client. A customer is the only client
+    // in their own data, so the drawer would just repeat the tile.
+    const tapOK = !isCustomer();
     if(el){
       el.classList.add("six");
       el.innerHTML=`
       <div class="stat accent-cyan"><div class="stat-n num">${trucksToday}</div><div class="stat-l">Trucks today</div></div>
-      <div class="stat accent-cyan tap" role="button" tabindex="0" onclick="showTodaySplit('dispatch')"
-           onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();showTodaySplit('dispatch');}">
+      <div class="stat accent-cyan${tapOK?" tap":""}" ${tapOK?`role="button" tabindex="0" onclick="showTodaySplit('dispatch')"
+           onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();showTodaySplit('dispatch');}"`:""}>
         <div class="stat-n num">${fmtT(dispKg)}<span class="stat-u">t</span></div>
         <div class="stat-l">Tons dispatched</div></div>
-      <div class="stat accent-green tap" role="button" tabindex="0" onclick="showTodaySplit('receive')"
-           onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();showTodaySplit('receive');}">
+      <div class="stat accent-green${tapOK?" tap":""}" ${tapOK?`role="button" tabindex="0" onclick="showTodaySplit('receive')"
+           onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();showTodaySplit('receive');}"`:""}>
         <div class="stat-n num">${fmtT(recvKg)}<span class="stat-u">t</span></div>
         <div class="stat-l">Tons received</div></div>
       <div class="stat accent-gold"><div class="stat-n num">${fmtT(tonsToday)}<span class="stat-u">t</span></div><div class="stat-l">Total tons today</div></div>
@@ -2826,6 +3021,9 @@ function closeDrawer(){ $("veil").classList.remove("show"); }
 
 // ── site filter ───────────────────────────────────────────────
 async function populateSiteFilter(){
+  // The select this filled was removed; without this guard it still fetched
+  // 500 readings rows every four seconds to populate nothing.
+  if(!document.getElementById('siteFilter')) return;
   const since = new Date(Date.now()-30*24*3600*1000).toISOString();
   try {
     const rows = await sb(`readings?select=site&ts=gte.${since}&limit=500`);
@@ -2875,9 +3073,22 @@ async function startApp(session){
   const o=$("loginOverlay"); if(o) o.style.display="none";
   const sh=$("shell"); if(sh) sh.style.display="";
   try{
-    const {data} = await supa.rpc('my_access');
-    if(data && data.length){ IS_ADMIN = !!data[0].is_admin; MY_SITE = data[0].site||null; }
+    // iss_my_access carries the customer field; my_access is the older one
+    // and is still there for any backend that has not run the migration.
+    let data=null;
+    try{ ({data} = await supa.rpc('iss_my_access')); }catch(e){ data=null; }
+    if(!data || !data.length){ ({data} = await supa.rpc('my_access')); }
+    if(data && data.length){
+      IS_ADMIN = !!data[0].is_admin;
+      MY_SITE  = data[0].site||null;
+      MY_CUSTOMER = (data[0].customer||"").trim() || null;
+    }
   }catch(e){}
+  // An admin's last site choice outlives the session — signing back in to
+  // "All sites" every morning is not what anyone wants mid-commissioning.
+  if(IS_ADMIN && !MY_SITE){
+    try{ const saved=localStorage.getItem("iss_admin_site"); if(saved) MY_SITE=saved; }catch(e){}
+  }
   const at=$("tabAdmin"); if(at) at.style.display = IS_ADMIN ? "" : "none";
   setSiteBanner();
   if(!STARTED){ STARTED=true; setDays(0); tick(); }
