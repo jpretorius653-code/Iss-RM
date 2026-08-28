@@ -186,6 +186,19 @@ html,body{height:100%;background:var(--bg);color:var(--ink);
 .stat-l{font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin-top:6px}
 .stat-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:12px}
 @media(min-width:560px){.stat-grid{grid-template-columns:repeat(4,1fr)}}
+/* Six tiles read badly in a four-wide grid — the last two sit alone. */
+@media(min-width:560px){.stat-grid.six{grid-template-columns:repeat(3,1fr)}}
+/* A tile that opens a breakdown says so: the chevron is the only thing
+   distinguishing it from a tile that does nothing when pressed. */
+.stat.tap{cursor:pointer;-webkit-tap-highlight-color:transparent}
+.stat.tap:after{content:"›";position:absolute;top:9px;right:11px;font-size:16px;
+  line-height:1;color:var(--muted);font-weight:700}
+.stat.tap:hover{border-color:rgba(41,171,226,.45)}
+.stat.tap:active{transform:scale(.985)}
+.stat.tap:focus-visible{outline:2px solid var(--gold2);outline-offset:2px}
+/* Share of the day, under each name in the breakdown drawer. */
+.split-bar{height:3px;border-radius:2px;background:var(--line);margin-top:5px;overflow:hidden}
+.split-bar i{display:block;height:100%;background:var(--cyan);border-radius:2px}
 .eyebrow{font-size:10px;letter-spacing:2.2px;text-transform:uppercase;color:var(--gold2);
   margin-bottom:10px;font-weight:700;opacity:.9}
 .tiles{display:grid;gap:10px;margin-bottom:14px}
@@ -413,7 +426,7 @@ input[readonly]{border-color:var(--line);color:var(--muted)}
 <div id="pages">
 
   <!-- PLANT -->
-  <div class="page active" id="pg-plant">
+  <div class="page" id="pg-plant">
     <div class="plant-hero">
       <div class="ph-main">
         <div class="ph-label">Plant feed flow</div>
@@ -514,7 +527,7 @@ input[readonly]{border-color:var(--line);color:var(--muted)}
   </div>
 
   <!-- TRUCKS -->
-  <div class="page" id="pg-trucks">
+  <div class="page active" id="pg-trucks">
     <div class="eyebrow">Live weight</div>
     <div id="wbLive" class="wb-live"><div class="empty">Looking for a weighbridge…</div></div>
     <div class="eyebrow">Today</div>
@@ -653,7 +666,10 @@ input[readonly]{border-color:var(--line);color:var(--muted)}
 
 <!-- tab bar -->
 <div id="tabs">
-  <button class="tab on" data-page="plant" onclick="nav(this)">
+  <button class="tab on" data-page="trucks" onclick="nav(this)">
+    <svg viewBox="0 0 24 24"><rect x="1" y="10" width="14" height="10" rx="1"/><path d="M15 14h4l3 3v3h-7V14z"/><circle cx="5" cy="20" r="2"/><circle cx="19" cy="20" r="2"/></svg>Trucks
+  </button>
+  <button class="tab" data-page="plant" onclick="nav(this)">
     <svg viewBox="0 0 24 24"><path d="M3 18h18M3 12h18M9 6h12"/></svg>Plant
   </button>
   <button class="tab" data-page="scales" onclick="nav(this)">
@@ -661,9 +677,6 @@ input[readonly]{border-color:var(--line);color:var(--muted)}
   </button>
   <button class="tab" data-page="reports" onclick="nav(this)">
     <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 12h8M8 8h8M8 16h5"/></svg>Reports
-  </button>
-  <button class="tab" data-page="trucks" onclick="nav(this)">
-    <svg viewBox="0 0 24 24"><rect x="1" y="10" width="14" height="10" rx="1"/><path d="M15 14h4l3 3v3h-7V14z"/><circle cx="5" cy="20" r="2"/><circle cx="19" cy="20" r="2"/></svg>Trucks
   </button>
   <button class="tab" data-page="orders" onclick="nav(this)">
     <svg viewBox="0 0 24 24"><path d="M5 4h11l3 3v13H5zM8 11h8M8 15h5"/></svg>Orders
@@ -735,7 +748,7 @@ async function sb(q){
 //  site login may only READ this table and every save comes back 403.
 //  fleetGate() says so in plain language instead of failing silently.
 // ════════════════════════════════════════════════════════════
-const DASH_BUILD="2026-08-27c";      // bump on every deploy
+const DASH_BUILD="2026-08-27d";      // bump on every deploy
 try{ console.log("ISS Remote Monitor — build "+DASH_BUILD); }catch(e){}
 let FLEET=[], FLEET_SITE="", FLEET_EDIT=null, FLEET_PENDING=null, FLEET_RO=false;
 
@@ -1619,7 +1632,9 @@ function applySiteCapabilities(){
 }
 
 // ── nav ──────────────────────────────────────────────────────
-let curPage = "plant";
+// Trucks is the landing page: on a weighbridge site it is the only page
+// that matters, and on a plant site it is still the first thing asked about.
+let curPage = "trucks";
 function nav(btn){
   document.querySelectorAll(".tab").forEach(t=>t.classList.remove("on"));
   document.querySelectorAll(".page").forEach(p=>p.classList.remove("active"));
@@ -2583,23 +2598,89 @@ async function loadTrucks(){
     renderTrucks(onsite,complete);
     // today's totals (completed tickets since local midnight)
     const start=new Date(); start.setHours(0,0,0,0);
-    const today=await sb(`transactions?select=net,action,time_in,time_out&status=eq.complete&time_out=gte.${encodeURIComponent(start.toISOString())}`+sf);
+    const today=await sb(`transactions?select=net,action,time_in,time_out,customer,supplier,product&status=eq.complete&time_out=gte.${encodeURIComponent(start.toISOString())}`+sf);
+    // Held so the breakdown drawer can open without a second round trip —
+    // it is the same day's tickets either way.
+    TRUCKS_TODAY=today;
     const trucksToday=today.length;
-    const tonsToday=today.reduce((s,r)=>s+(parseFloat(r.net)||0),0);
+    const dispRows=today.filter(r=>isDispatch(r.action));
+    const recvRows=today.filter(r=>!isDispatch(r.action));
+    const kg=rs=>rs.reduce((s,r)=>s+(parseFloat(r.net)||0),0);
+    const dispKg=kg(dispRows), recvKg=kg(recvRows), tonsToday=dispKg+recvKg;
     const tas=today.filter(r=>r.time_in&&r.time_out).map(r=>(new Date(r.time_out)-new Date(r.time_in))/60000).filter(v=>v>=0);
     const avgTa=tas.length ? tas.reduce((a,b)=>a+b,0)/tas.length : null;
-    const disp=today.filter(r=>isDispatch(r.action)).length;
-    const recv=trucksToday-disp;
+    const disp=dispRows.length, recv=recvRows.length;
     const el=$("trucksToday");
-    if(el) el.innerHTML=`
+    if(el){
+      el.classList.add("six");
+      el.innerHTML=`
       <div class="stat accent-cyan"><div class="stat-n num">${trucksToday}</div><div class="stat-l">Trucks today</div></div>
-      <div class="stat accent-gold"><div class="stat-n num">${fmtT(tonsToday)}<span class="stat-u">t</span></div><div class="stat-l">Tons moved today</div></div>
+      <div class="stat accent-cyan tap" role="button" tabindex="0" onclick="showTodaySplit('dispatch')"
+           onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();showTodaySplit('dispatch');}">
+        <div class="stat-n num">${fmtT(dispKg)}<span class="stat-u">t</span></div>
+        <div class="stat-l">Tons dispatched</div></div>
+      <div class="stat accent-green tap" role="button" tabindex="0" onclick="showTodaySplit('receive')"
+           onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();showTodaySplit('receive');}">
+        <div class="stat-n num">${fmtT(recvKg)}<span class="stat-u">t</span></div>
+        <div class="stat-l">Tons received</div></div>
+      <div class="stat accent-gold"><div class="stat-n num">${fmtT(tonsToday)}<span class="stat-u">t</span></div><div class="stat-l">Total tons today</div></div>
       <div class="stat accent-amber"><div class="stat-n num">${avgTa==null?'—':durStr(avgTa)}</div><div class="stat-l">Avg turnaround</div></div>
       <div class="stat accent-green"><div class="stat-n num">${onsite.length}</div><div class="stat-l">On site now</div></div>`;
+    }
     const sp=$("trucksSplit");
     if(sp) sp.innerHTML = trucksToday ? `<span class="pill pill-d">▲ ${disp} dispatch</span><span class="pill pill-r">▼ ${recv} receive</span>` : "";
     $("trucksStatus").textContent=`Updated ${new Date().toLocaleTimeString()} · ${onsite.length} on site`;
   }catch(e){ $("trucksStatus").textContent="Connection error"; }
+}
+
+/* Today's completed tickets, kept from the last refresh. */
+let TRUCKS_TODAY=[];
+
+/* Dispatched tons belong to the client they went to; received tons to the
+   supplier they came from. Same table, different column — which is why one
+   function serves both and the caller only names the direction. */
+function showTodaySplit(kind){
+  const out   = (kind==="dispatch");
+  const rows  = (TRUCKS_TODAY||[]).filter(r=> out ? isDispatch(r.action) : !isDispatch(r.action));
+  const field = out ? "customer" : "supplier";
+  const head  = out ? "Client" : "Supplier";
+  const title = out ? "Tons dispatched today" : "Tons received today";
+  if(!rows.length){
+    openDrawer(`<h3>${title}</h3><div class="empty">Nothing ${out?"dispatched":"received"} yet today</div>`);
+    return;
+  }
+  const by={}; let blank=0;
+  rows.forEach(r=>{
+    const raw=String(r[field]==null?"":r[field]).trim();
+    if(!raw) blank++;
+    const k=raw||"(not recorded)";
+    const b=by[k]||(by[k]={loads:0,kg:0});
+    b.loads++; b.kg+=parseFloat(r.net)||0;
+  });
+  const list=Object.entries(by).sort((a,b)=>b[1].kg-a[1].kg);
+  const totKg=list.reduce((s,[,v])=>s+v.kg,0);
+  const totLd=list.reduce((s,[,v])=>s+v.loads,0);
+  const body=list.map(([name,v])=>{
+    const pct = totKg>0 ? (v.kg/totKg*100) : 0;
+    return `<tr>
+      <td>${esc(name)}<div class="split-bar"><i style="width:${pct.toFixed(1)}%"></i></div></td>
+      <td class="num">${v.loads}</td>
+      <td class="num" style="font-weight:800">${fmtT(v.kg)}</td>
+      <td class="num" style="color:var(--muted)">${pct.toFixed(0)}%</td></tr>`;
+  }).join("");
+  // Supplier only started reaching the cloud in app 9.9.1. Saying so beats
+  // a client wondering why half their tonnage is filed under nothing.
+  const note = blank ? `<div class="sub" style="color:var(--amber)">${blank} of ${rows.length}
+    ticket${rows.length===1?"":"s"} carries no ${head.toLowerCase()} — those are grouped as
+    (not recorded).</div>` : "";
+  openDrawer(`<h3>${title}</h3>
+    <div class="sub">${fmtT(totKg)} t over ${totLd} load${totLd===1?"":"s"} · since midnight</div>
+    ${note}
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>${head}</th><th class="num">Loads</th><th class="num">Tons</th><th class="num">Share</th></tr></thead>
+      <tbody>${body}</tbody>
+      <tfoot><tr><th>Total</th><th class="num">${totLd}</th><th class="num">${fmtT(totKg)}</th><th></th></tr></tfoot>
+    </table></div>`);
 }
 
 function timerStr(timeIn){
