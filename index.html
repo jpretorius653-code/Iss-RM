@@ -796,7 +796,7 @@ async function sb(q){
 //  site login may only READ this table and every save comes back 403.
 //  fleetGate() says so in plain language instead of failing silently.
 // ════════════════════════════════════════════════════════════
-const DASH_BUILD="2026-08-27h";      // bump on every deploy
+const DASH_BUILD="2026-08-30a";      // bump on every deploy
 try{ console.log("ISS Remote Monitor — build "+DASH_BUILD); }catch(e){}
 let FLEET=[], FLEET_SITE="", FLEET_EDIT=null, FLEET_PENDING=null, FLEET_RO=false;
 
@@ -1903,7 +1903,11 @@ async function adminCreateCustomer(){
   try{
     const r=await fetch(SB_URL+"/functions/v1/admin-create-user",{
       method:"POST",
-      headers:{ "Content-Type":"application/json", "Authorization":"Bearer "+ACCESS_TOKEN, "apikey":SB_KEY },
+      // No apikey header. The browser preflights any request carrying it, and
+      // the function only allows authorization + content-type — the preflight
+      // is refused and the fetch dies as "Failed to fetch" before it is sent.
+      // The bearer token is what the gateway and the function both read.
+      headers:{ "Content-Type":"application/json", "Authorization":"Bearer "+ACCESS_TOKEN },
       body:JSON.stringify({email,password:pass,site,customer:cust})
     });
     const out=await r.json().catch(()=>({error:"no response"}));
@@ -1913,7 +1917,12 @@ async function adminCreateCustomer(){
     $("acEmail").value=""; $("acPass").value=""; $("acCust").value="";
     await loadSites();
   }catch(e){
-    st.textContent="Failed: "+((e&&e.message)||e)+" — is the admin-create-user function deployed?";
+    // "Failed to fetch" never reaches the function: it is the browser refusing
+    // the request, so say what actually causes it rather than blaming deploy.
+    const m=String((e&&e.message)||e);
+    st.textContent = /fetch/i.test(m)
+      ? "Failed: the browser blocked the request. Check the function is deployed and that Verify JWT with legacy secret is OFF in its Settings."
+      : "Failed: "+m;
   }
 }
 
