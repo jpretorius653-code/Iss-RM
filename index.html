@@ -1744,10 +1744,13 @@ function nav(btn){
 async function sbPatch(path, body){
   const r = await fetch(SB_URL+"/rest/v1/"+path, {
     method:"PATCH",
-    headers:{...authHeaders(), "Content-Type":"application/json", "Prefer":"return=minimal"},
+    headers:{...authHeaders(), "Content-Type":"application/json", "Prefer":"return=representation"},
     body: JSON.stringify(body)
   });
   if(!r.ok) throw new Error(r.status);
+  // RLS filters a forbidden row out silently: 200 with zero rows updated.
+  const done = await r.json().catch(()=>[]);
+  if(Array.isArray(done) && !done.length) throw new Error("no row updated — not permitted or already removed");
 }
 
 async function sbPost(path, body){
