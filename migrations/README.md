@@ -18,3 +18,17 @@ time, in order, and check the dashboard after each.
   need a decision on the canonical site codes (`hillside` vs `Hillside`, `vjs`
   vs `Jvs`).
 * **`sites` config table (#5 structure)** — needs the shift times per site.
+
+## Hillside Cloud Sync must keep working
+
+Hillside's Cloud Sync posts with the public (anon) key: `POST transactions?on_conflict=ext_id`
+(merge-duplicates). Nothing in this folder touches that path:
+
+* No migration changes the anon INSERT policy or any table grant on `transactions`/`readings`.
+* 01 revokes EXECUTE on maintenance/admin functions only. Trigger functions
+  (`register_scale`, `iss_tx_*`) keep firing — Postgres does not check EXECUTE when a trigger fires.
+* **Do not drop the anon policies** until a replacement ingest path is live *and* the
+  Hillside PC has been updated and confirmed uploading.
+
+Verify after applying 01: a Hillside ticket completed afterwards still appears in
+`transactions` (latest `ext_id` like `hillside:%`).

@@ -1321,7 +1321,7 @@ async function loadOrders(){
   try{
     // Only completed tickets count. An open ticket is a truck on the
     // weighbridge, not tonnage delivered.
-    const rows=await sbAll("transactions?select=order_no,net,action&status=eq.complete&order_no=not.is.null"+sf+"&order=time_out.asc");
+    const rows=await sbAll("transactions?select=order_no,net,action&status=eq.complete&order_no=not.is.null"+sf+"&order=time_out.asc,id.asc");
     rows.forEach(r=>{
       const k=String(r.order_no||"").trim(); if(!k) return;
       const t=Number(r.net)||0;
@@ -2306,7 +2306,7 @@ async function refreshYield15(){
   // watchdog dropouts) doesn't under-count its delta and inflate the ratio.
   const roleRate=async arr=>{
     const sets=await Promise.all(arr.map(async s=>{
-      try{ return await sb(`readings?select=total,ts&device=eq.${encodeURIComponent(s.device)}&ts=gte.${since}&order=ts.asc`); }catch(e){ return []; }
+      try{ return await sb(`readings?select=total,ts&device=eq.${encodeURIComponent(s.device)}&ts=gte.${since}&order=ts.asc,id.asc`); }catch(e){ return []; }
     }));
     let dtot=0, minT=Infinity, maxT=-Infinity, any=false;
     sets.forEach(rows=>{
@@ -2385,7 +2385,7 @@ async function refreshPlantHourly(){
   const since=new Date(Date.now()-48*3600*1000).toISOString();
   const per={};
   await Promise.all(belts.map(async s=>{
-    try{ per[s.device]=await sb(`hourly?select=hour,tons&device=eq.${encodeURIComponent(s.device)}&hour=gte.${since}&order=hour.asc`); }
+    try{ per[s.device]=await sb(`hourly?select=hour,tons&device=eq.${encodeURIComponent(s.device)}&hour=gte.${since}&order=hour.asc,id.asc`); }
     catch(e){ per[s.device]=[]; }
   }));
   const feeds=belts.filter(s=>s.role==="feed"), prods=belts.filter(s=>s.role==="product"), discs=belts.filter(s=>s.role==="discard");
@@ -2452,7 +2452,7 @@ function dLabel(ms){ return new Date(ms).toLocaleDateString([], {day:'2-digit',m
 function hLabel(d){ return d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}); }
 async function hourlyData(device, days){
   const since=new Date(Date.now()-days*24*3600*1000).toISOString();
-  const rows=await sbAll(`readings?select=total,speed,ts&device=eq.${device}&ts=gte.${since}&order=ts.asc`);
+  const rows=await sbAll(`readings?select=total,speed,ts&device=eq.${device}&ts=gte.${since}&order=ts.asc,id.asc`);
   const b={};
   for(const r of rows){
     const d=new Date(r.ts); d.setMinutes(0,0,0); const k=d.getTime();
@@ -2512,13 +2512,13 @@ async function genBelt(from,to){
   const fISO=from.toISOString(), tISO=to.toISOString();
   const per={};
   await Promise.all(belts.map(async s=>{
-    try{ per[s.device]=await sbAll(`hourly?select=hour,opening,closing,tons&device=eq.${encodeURIComponent(s.device)}&hour=gte.${fISO}&hour=lte.${tISO}&order=hour.asc`); }
+    try{ per[s.device]=await sbAll(`hourly?select=hour,opening,closing,tons&device=eq.${encodeURIComponent(s.device)}&hour=gte.${fISO}&hour=lte.${tISO}&order=hour.asc,id.asc`); }
     catch(e){ per[s.device]=[]; }
   }));
   const feeds=belts.filter(s=>s.role==="feed"), prods=belts.filter(s=>s.role==="product"), discs=belts.filter(s=>s.role==="discard");
   // Source/RD allocation — map each hour's tonnes to the source active then (per site)
   let slog=[];
-  try{ slog = await sbAll(`source_log?select=site,source,rd,started_at&started_at=lte.${tISO}&order=started_at.desc`); }catch(e){}
+  try{ slog = await sbAll(`source_log?select=site,source,rd,started_at&started_at=lte.${tISO}&order=started_at.desc,id.desc`); }catch(e){}
   const activeSrc=(site,ts)=>{ for(const e of slog){ const es=e.site||""; if((es===(site||"")||es==="") && new Date(e.started_at).getTime()<=ts) return e; } return null; };
   const bySrc={};
   const allocSrc=(s,role)=>{ (per[s.device]||[]).forEach(h=>{
@@ -2583,7 +2583,7 @@ async function genWeighbridge(from,to){
   const fISO=from.toISOString(), tISO=to.toISOString();
   // server-side filters that map cleanly to columns
   // Dated by time_out (when the ticket completed) — same as the site's own export.
-  let q=`transactions?select=*&status=eq.complete&time_out=gte.${fISO}&time_out=lte.${tISO}&order=time_out.desc`;
+  let q=`transactions?select=*&status=eq.complete&time_out=gte.${fISO}&time_out=lte.${tISO}&order=time_out.desc,id.desc`;
   const rsite=String(MY_SITE||plantSite()||"").trim();
   if(rsite) q+=`&site=eq.${encodeURIComponent(rsite)}`;
   const ilike=(col,val)=>{ if(val && val.trim()) return `&${col}=ilike.*${encodeURIComponent(val.trim())}*`; return ""; };
