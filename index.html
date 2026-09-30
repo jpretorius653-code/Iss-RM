@@ -778,11 +778,27 @@ const kgToT = kg => nz(kg)/1000;
 const fmtT  = (kg,d=2) => fmt(kgToT(kg),d);
 const hhmm = s => s ? new Date(s).toLocaleString([],{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}) : '—';
 
+function setConn(ok){ const c=$("conn"); if(!c) return; c.className=ok?"ok":"err"; c.innerHTML='<i class="dot"></i>'+(ok?"live":"offline"); }
+let SB_ERRS=0;   // failed requests since the current tick began — drives the live/offline badge
 async function sb(q){
-  const r = await fetch(SB_URL+"/rest/v1/"+q,{headers:authHeaders()});
+  let r;
+  try{ r = await fetch(SB_URL+"/rest/v1/"+q,{headers:authHeaders()}); }
+  catch(e){ SB_ERRS++; throw e; }
   if(r.status===401 || r.status===403){ showLogin("Session expired — please sign in again."); throw new Error(r.status); }
-  if(!r.ok) throw new Error(r.status);
+  if(!r.ok){ SB_ERRS++; throw new Error(r.status); }
   return r.json();
+}
+// PostgREST caps every response (default 1000 rows) whatever limit= says, so a
+// big report must be fetched page by page or it is silently truncated.
+async function sbAll(q){
+  const PAGE=1000, base=q.replace(/&limit=\d+/,"");
+  let out=[];
+  for(let off=0; off<1000000; off+=PAGE){
+    const rows=await sb(base+`&limit=${PAGE}&offset=${off}`);
+    out=out.concat(rows);
+    if(rows.length<PAGE) break;
+  }
+  return out;
 }
 
 // ════════════════════════════════════════════════════════════
@@ -796,7 +812,7 @@ async function sb(q){
 //  site login may only READ this table and every save comes back 403.
 //  fleetGate() says so in plain language instead of failing silently.
 // ════════════════════════════════════════════════════════════
-const DASH_BUILD="2026-08-30a";      // bump on every deploy
+const DASH_BUILD="2026-09-30a";      // bump on every deploy
 try{ console.log("ISS Remote Monitor — build "+DASH_BUILD); }catch(e){}
 let FLEET=[], FLEET_SITE="", FLEET_EDIT=null, FLEET_PENDING=null, FLEET_RO=false;
 
@@ -1022,7 +1038,7 @@ async function sbUpsert(path, body){
 }
 function jq(v){ return esc(JSON.stringify(String(v==null?"":v))); }   // safe JS string literal inside an HTML attribute
 function esc(v){ return String(v==null?"":v)
-  .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+  .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;"); }
 // ── template / import / export ───────────────────────────────
 // Same columns and the same header matching as the weighbridge app, so one
 // sheet works in both places. XLSX is written with STORED zip entries — no
@@ -1305,7 +1321,7 @@ async function loadOrders(){
   try{
     // Only completed tickets count. An open ticket is a truck on the
     // weighbridge, not tonnage delivered.
-    const rows=await sb("transactions?select=order_no,net,action&status=eq.complete&order_no=not.is.null"+sf+"&limit=5000");
+    const rows=await sbAll("transactions?select=order_no,net,action&status=eq.complete&order_no=not.is.null"+sf+"&order=time_out.asc");
     rows.forEach(r=>{
       const k=String(r.order_no||"").trim(); if(!k) return;
       const t=Number(r.net)||0;
@@ -1364,10 +1380,10 @@ function renderOrders(){
                     :`${fmt(Math.max(0,p.target-p.done),1)} t remaining`}</span>
       </div>`}
       <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
-        <button onclick="showOrder('${esc(o.order_no)}')" style="flex:1;min-width:90px;background:none;border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:7px;font-size:12px">Tickets</button>
-        <button onclick="openOrderForm('${esc(o.order_no)}')" style="flex:1;min-width:70px;background:none;border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:7px;font-size:12px">Edit</button>
-        <button onclick="retireOrder('${esc(o.order_no)}',${o.active===false})" style="flex:1;min-width:70px;background:none;border:1px solid var(--gold);color:var(--gold);border-radius:8px;padding:7px;font-size:12px">${o.active===false?"Reopen":"Retire"}</button>
-        <button onclick="deleteOrder('${esc(o.order_no)}')" style="background:none;border:1px solid rgba(242,100,122,.4);color:var(--red);border-radius:8px;padding:7px 12px;font-size:12px">Delete</button>
+        <button onclick="showOrder(${jq(o.order_no)})" style="flex:1;min-width:90px;background:none;border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:7px;font-size:12px">Tickets</button>
+        <button onclick="openOrderForm(${jq(o.order_no)})" style="flex:1;min-width:70px;background:none;border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:7px;font-size:12px">Edit</button>
+        <button onclick="retireOrder(${jq(o.order_no)},${o.active===false})" style="flex:1;min-width:70px;background:none;border:1px solid var(--gold);color:var(--gold);border-radius:8px;padding:7px;font-size:12px">${o.active===false?"Reopen":"Retire"}</button>
+        <button onclick="deleteOrder(${jq(o.order_no)})" style="background:none;border:1px solid rgba(242,100,122,.4);color:var(--red);border-radius:8px;padding:7px 12px;font-size:12px">Delete</button>
       </div>
     </div>`;
   }).join("");
@@ -1877,7 +1893,7 @@ async function loadAdminUsers(){
       <td>${u.site?esc(u.site):(u.is_admin?'<span style="color:#29ABE2">all sites</span>':'<span style="color:#f0c674">none</span>')}</td>
       <td>${u.is_admin?"ISS admin":(u.customer?`<span style="color:var(--gold2)">customer</span><br><span style="font-size:11px;color:var(--muted)">${esc(u.customer)}</span>`:"site")}</td>
       <td>${u.last_sign_in?new Date(u.last_sign_in).toLocaleDateString():"never"}</td>
-      <td style="text-align:right">${u.linked?`<button class="fbtn sm dngr" onclick="adminUnlink('${esc(u.email)}')">Unlink</button>`:""}</td>
+      <td style="text-align:right">${u.linked?`<button class="fbtn sm dngr" onclick="adminUnlink(${jq(u.email)})">Unlink</button>`:""}</td>
     </tr>`).join("")}</tbody></table></div></div>`;
 }
 /* The names that actually appear on tickets at this site, commonest first.
@@ -2192,7 +2208,7 @@ async function renderAdminSites(){
   try{ opts=await fleetSiteOptions(); }catch(e){ opts=[]; }
   const cur=String(MY_SITE||"").trim().toLowerCase();
   const btn=(code,label,sub)=>`<button class="site-btn${cur===code?" on":""}"
-      onclick="adminUseSite('${String(code).replace(/'/g,"\\'")}')">
+      onclick="adminUseSite(${jq(code)})">
       <b>${esc(label)}</b><small>${esc(sub)}</small></button>`;
   el.innerHTML = btn("", "All sites", cur===""?"viewing":"whole estate")
     + opts.map(c=>btn(c, siteTitle(c)||c, cur===c ? "viewing" : c)).join("");
@@ -2354,11 +2370,10 @@ async function refreshScales(){
   try{ await refreshPlantHourly(); }catch(e){}
 
   // connection badge
-  $("conn").className="ok"; $("conn").innerHTML='<i class="dot"></i>live';
+  setConn(SB_ERRS===0);
   const ts = new Date().toLocaleTimeString();
   $("plantStatus").textContent = `Updated ${ts} · ${SCALES.length} scale${SCALES.length!==1?"s":""} found`;
   $("scalesStatus").textContent = `Updated ${ts} · ${SCALES.length} scale${SCALES.length!==1?"s":""} found`;
-  $("conn").className="ok"; $("conn").innerHTML='<i class="dot"></i>live';
 }
 
 async function refreshPlantHourly(){
@@ -2434,7 +2449,7 @@ function dLabel(ms){ return new Date(ms).toLocaleDateString([], {day:'2-digit',m
 function hLabel(d){ return d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}); }
 async function hourlyData(device, days){
   const since=new Date(Date.now()-days*24*3600*1000).toISOString();
-  const rows=await sb(`readings?select=total,speed,ts&device=eq.${device}&ts=gte.${since}&order=ts.asc&limit=20000`);
+  const rows=await sbAll(`readings?select=total,speed,ts&device=eq.${device}&ts=gte.${since}&order=ts.asc`);
   const b={};
   for(const r of rows){
     const d=new Date(r.ts); d.setMinutes(0,0,0); const k=d.getTime();
@@ -2468,8 +2483,9 @@ function setDays(d){  // used at boot to default the date inputs
   const to=new Date(); const from=new Date();
   if(d>0) from.setDate(from.getDate()-d);
   const F=$("rFrom"), T=$("rTo");
-  if(F) F.value=from.toISOString().slice(0,10);
-  if(T) T.value=to.toISOString().slice(0,10);
+  const ymd=d=>d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");  // local date, not UTC
+  if(F) F.value=ymd(from);
+  if(T) T.value=ymd(to);
 }
 function loadReports(){ const F=$("rFrom"); if(F && !F.value) setDays(0); toggleWbFilters(); }  // init only
 function toggleWbFilters(){ const w=$("wbFilters"); if(w) w.style.display = ($("rType").value==="wb")?"":"none"; }
@@ -2480,6 +2496,10 @@ async function genReport(){
   const to=new Date($("rTo").value+"T23:59:59");
   if(isNaN(from)||isNaN(to)){ $("rptStatus").textContent="Pick a valid From and To date."; return; }
   $("rptBody").innerHTML='<div class="empty">Generating…</div>'; $("rptChart").innerHTML='';
+  if(type!=="wb"){  // shift-days run 06:00→06:00, so the window must too
+    from.setHours(6,0,0,0);
+    to.setDate(to.getDate()+1); to.setHours(5,59,59,0);
+  }
   return (type==="wb") ? genWeighbridge(from,to) : genBelt(from,to);
 }
 
@@ -2489,13 +2509,13 @@ async function genBelt(from,to){
   const fISO=from.toISOString(), tISO=to.toISOString();
   const per={};
   await Promise.all(belts.map(async s=>{
-    try{ per[s.device]=await sb(`hourly?select=hour,opening,closing,tons&device=eq.${encodeURIComponent(s.device)}&hour=gte.${fISO}&hour=lte.${tISO}&order=hour.asc`); }
+    try{ per[s.device]=await sbAll(`hourly?select=hour,opening,closing,tons&device=eq.${encodeURIComponent(s.device)}&hour=gte.${fISO}&hour=lte.${tISO}&order=hour.asc`); }
     catch(e){ per[s.device]=[]; }
   }));
   const feeds=belts.filter(s=>s.role==="feed"), prods=belts.filter(s=>s.role==="product"), discs=belts.filter(s=>s.role==="discard");
   // Source/RD allocation — map each hour's tonnes to the source active then (per site)
   let slog=[];
-  try{ slog = await sb(`source_log?select=site,source,rd,started_at&started_at=lte.${tISO}&order=started_at.desc&limit=5000`); }catch(e){}
+  try{ slog = await sbAll(`source_log?select=site,source,rd,started_at&started_at=lte.${tISO}&order=started_at.desc`); }catch(e){}
   const activeSrc=(site,ts)=>{ for(const e of slog){ const es=e.site||""; if((es===(site||"")||es==="") && new Date(e.started_at).getTime()<=ts) return e; } return null; };
   const bySrc={};
   const allocSrc=(s,role)=>{ (per[s.device]||[]).forEach(h=>{
@@ -2559,7 +2579,10 @@ function barChart(combined){
 async function genWeighbridge(from,to){
   const fISO=from.toISOString(), tISO=to.toISOString();
   // server-side filters that map cleanly to columns
-  let q=`transactions?select=*&time_in=gte.${fISO}&time_in=lte.${tISO}&order=time_in.desc&limit=5000`;
+  // Dated by time_out (when the ticket completed) — same as the site's own export.
+  let q=`transactions?select=*&status=eq.complete&time_out=gte.${fISO}&time_out=lte.${tISO}&order=time_out.desc`;
+  const rsite=String(MY_SITE||plantSite()||"").trim();
+  if(rsite) q+=`&site=eq.${encodeURIComponent(rsite)}`;
   const ilike=(col,val)=>{ if(val && val.trim()) return `&${col}=ilike.*${encodeURIComponent(val.trim())}*`; return ""; };
   q+=ilike("ticket",$("fTicket")?.value);
   q+=ilike("batch_no",$("fBatch")?.value);
@@ -2567,7 +2590,8 @@ async function genWeighbridge(from,to){
   q+=ilike("customer",$("fCustomer")?.value);
   q+=ilike("product",$("fProduct")?.value);
   let rows=[];
-  try{ rows=await sb(q); }catch(e){}
+  try{ rows=await sbAll(q); }
+  catch(e){ $("rptBody").innerHTML='<div class="empty">Could not load transactions — check your connection and try again.</div>'; $("rptStatus").textContent="Load failed ("+((e&&e.message)||e)+")"; return; }
   // A ticket voided at the bridge stays in the table but never counts here.
   // Filtered in JS, not with status=neq.void, because a NULL status (older
   // Cloud Sync rows) would silently drop out of a server-side inequality.
@@ -3059,6 +3083,8 @@ function setSiteFilter(v){
 
 // ── main loop ────────────────────────────────────────────────
 async function tick(){
+  if(document.hidden){ setTimeout(tick,4000); return; }   // no polling from a background tab
+  SB_ERRS=0;
   try{
     await populateSiteFilter();
     await discoverScales();
@@ -3069,7 +3095,7 @@ async function tick(){
       await loadTrucks();
     }
   }catch(e){
-    $("conn").className="err"; $("conn").innerHTML='<i class="dot"></i>offline';
+    setConn(false);
     console.error(e);
   }
   setTimeout(tick,4000);
@@ -3111,13 +3137,14 @@ async function startApp(session){
   setSiteBanner();
   if(!STARTED){ STARTED=true; setDays(0); tick(); }
   if(!INTERVALS){ INTERVALS=true; setInterval(()=>{
+    if(document.hidden) return;
     if(curPage==="reports") loadReports();
     if(curPage==="trucks")  loadTrucks();
     if(curPage==="orders")  loadOrders();
   },15000);
   // The weighbridge reading moves while a truck is settling, so it gets its
   // own faster tick — but only while that page is actually on screen.
-  setInterval(()=>{ if(curPage==="trucks") loadWbLive(); }, 4000); }
+  setInterval(()=>{ if(!document.hidden && curPage==="trucks") loadWbLive(); }, 4000); }
 }
 async function doLogin(){
   const u=($("luser").value||"").trim().toLowerCase();

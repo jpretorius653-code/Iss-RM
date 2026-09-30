@@ -1,7 +1,7 @@
 // ISS Remote Monitor — service worker (NETWORK-FIRST)
 // Installable PWA, but always loads the freshest files. Never serves a stale
 // dashboard. Bump CACHE_VER on each deploy to force a clean update.
-const CACHE_VER = 'iss-rm-v9';
+const CACHE_VER = 'iss-rm-v10';
 const CORE = ['/', '/index.html', '/manifest.json',
               '/icon-192.png', '/icon-512.png', '/icon-maskable-512.png', '/apple-touch-icon.png'];
 
