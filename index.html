@@ -1020,6 +1020,7 @@ async function sbUpsert(path, body){
   if(!r.ok){ let d=""; try{ d=(await r.text()).slice(0,200); }catch(e){}
              throw new Error(r.status+(d?": "+d:"")); }
 }
+function jq(v){ return esc(JSON.stringify(String(v==null?"":v))); }   // safe JS string literal inside an HTML attribute
 function esc(v){ return String(v==null?"":v)
   .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
 // ── template / import / export ───────────────────────────────
@@ -1550,7 +1551,7 @@ async function showOrder(no){
   const disp=rows.filter(r=>isDispatch(r.action)), recv=rows.filter(r=>!isDispatch(r.action));
   const sum=a=>a.reduce((t,r)=>t+nz(r.net),0);
   const body=rows.length ? rows.map(r=>`<tr>
-      <td>${r.ticket||"--"}</td>
+      <td>${esc(r.ticket||"--")}</td>
       <td style="font-family:monospace">${esc(r.reg||"--")}</td>
       <td>${esc(r.transporter||"--")}</td>
       <td><span class="pill ${isDispatch(r.action)?"pill-d":"pill-r"}">${isDispatch(r.action)?"disp":"recv"}</span></td>
@@ -1762,7 +1763,7 @@ async function loadSources(){
   SRC_SIG=sig;
   const cur = CUR_SRC && CUR_SRC.source;
   sel.innerHTML = '<option value="">— source —</option>' +
-    SRC_LIST.map(s=>`<option value="${(s.name||'').replace(/"/g,'&quot;')}"${s.name===cur?' selected':''}>${s.name}</option>`).join("");
+    SRC_LIST.map(s=>`<option value="${(s.name||'').replace(/"/g,'&quot;')}"${s.name===cur?' selected':''}>${esc(s.name)}</option>`).join("");
 }
 async function refreshCurrentSource(){
   if(SRC_LIST===null) await loadSources();
@@ -2011,7 +2012,7 @@ async function renderSrcMgr(){
   try{ rows = await sb(`sources?select=id,name,site,active&or=(site.eq.${enc},site.is.null)&order=name.asc`); }catch(e){}
   if(!rows.length){ list.innerHTML='<div class="empty">No sources yet — add one above.</div>'; return; }
   list.innerHTML = rows.map(r=>`<div class="scale-card" style="text-align:left;display:flex;justify-content:space-between;align-items:center;gap:10px">
-      <div><b>${(r.name||'').replace(/</g,'&lt;')}</b> <span style="font-size:11px;color:var(--muted)">${r.site||'all sites'}${r.active?'':' · inactive'}</span></div>
+      <div><b>${esc(r.name||'')}</b> <span style="font-size:11px;color:var(--muted)">${esc(r.site||'all sites')}${r.active?'':' · inactive'}</span></div>
       <button onclick="delSource(${r.id})" style="padding:7px 11px;border:1px solid var(--red);border-radius:7px;background:none;color:var(--red)">Remove</button>
     </div>`).join("");
 }
@@ -2142,19 +2143,19 @@ function scaleCardHTML(s){
   // reach r.rate below.
   const on = (stt==="live") && !!r;
   const dc = dotClass(r,s), st = statusText(r,s);
-  const siteTag = (s.site && s.site!=="") ? `<span style="font-size:10px;color:var(--muted)">${s.site}</span>` : '';
+  const siteTag = (s.site && s.site!=="") ? `<span style="font-size:10px;color:var(--muted)">${esc(s.site)}</span>` : '';
   // Red is for a board nobody can reach. A stopped belt on a live gateway is
   // amber — it needs no callout.
   const border = (stt==="live") ? 'var(--line)' : (stt==="idle" ? 'var(--amber)' : 'var(--red)');
   if(s.role==="weighbridge"){
-    return `<div class="scale-card" style="border-color:${border}" onclick="showScaleHistory('${s.device}','${s.name}')">
-      <div class="sc-name"><span class="sc-title">${s.name}</span><span class="sc-right">${siteTag}<span class="dot ${dc}"></span></span></div>
+    return `<div class="scale-card" style="border-color:${border}" onclick="showScaleHistory(${jq(s.device)},${jq(s.name)})">
+      <div class="sc-name"><span class="sc-title">${esc(s.name)}</span><span class="sc-right">${siteTag}<span class="dot ${dc}"></span></span></div>
       <div class="sc-rate num">${on?nz(r.weight):"--"}<span class="sc-unit"> kg</span></div>
       <div class="sc-subs"><span style="font-size:11px;color:var(--muted)">${st}</span></div>
     </div>`;
   }
-  return `<div class="scale-card" style="border-color:${border}" onclick="showScaleHistory('${s.device}','${s.name}')">
-    <div class="sc-name"><span class="sc-title">${s.name}</span><span class="sc-right">${siteTag}<span class="dot ${dc}"></span></span></div>
+  return `<div class="scale-card" style="border-color:${border}" onclick="showScaleHistory(${jq(s.device)},${jq(s.name)})">
+    <div class="sc-name"><span class="sc-title">${esc(s.name)}</span><span class="sc-right">${siteTag}<span class="dot ${dc}"></span></span></div>
     <div class="sc-rate num">${on?fmt(r.rate):"--"}<span class="sc-unit"> t/h</span></div>
     <div class="sc-subs">
       <span>Speed <b class="num">${on?fmt(nz(r.speed),2):"--"}</b> m/s</span>
@@ -2574,10 +2575,10 @@ async function genWeighbridge(from,to){
   rows=rows.filter(r=>String(r&&r.status||"").toLowerCase()!=="void");
   REPORT={type:"wb", rows, voided:nVoid};
   $("rptChart").innerHTML='';
-  const body=rows.map(r=>{ const ti=r.time_in?new Date(r.time_in):null, tо=r.time_out?new Date(r.time_out):null;
+  const body=rows.map(r=>{ const ti=r.time_in?new Date(r.time_in):null;
     return `<tr><td>${ti?dLabel(ti.getTime()):'--'}</td><td>${ti?hLabel(ti):'--'}</td>
-      <td>${r.ticket||'--'}</td><td>${r.batch_no||'--'}</td><td style="font-family:monospace">${r.reg||'--'}</td>
-      <td>${r.transporter||'--'}</td><td>${r.customer||'--'}</td><td>${r.product||'--'}</td>
+      <td>${esc(r.ticket||'--')}</td><td>${esc(r.batch_no||'--')}</td><td style="font-family:monospace">${esc(r.reg||'--')}</td>
+      <td>${esc(r.transporter||'--')}</td><td>${esc(r.customer||'--')}</td><td>${esc(r.product||'--')}</td>
       <td class="num">${r.net!=null?fmtT(r.net):'--'}</td></tr>`; }).join("");
   const totNet=rows.reduce((a,r)=>a+nz(r.net),0);
   $("rptBody").innerHTML=`<div class="eyebrow">Transactions (${rows.length}) · ${fmtT(totNet)} t net</div>
@@ -2965,8 +2966,8 @@ function renderTrucks(onsite,recent){
   $("trucksOnsite").innerHTML = onsite.length ? onsite.map(r=>`
     <div class="card" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
       <div>
-        <div style="font-size:18px;font-weight:900;font-family:'Courier New',monospace;letter-spacing:2px">${r.reg||"—"}</div>
-        <div style="font-size:11px;color:var(--muted);margin-top:3px">${r.customer||""} · ${r.product||""}</div>
+        <div style="font-size:18px;font-weight:900;font-family:'Courier New',monospace;letter-spacing:2px">${esc(r.reg||"—")}</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:3px">${esc(r.customer||"")} · ${esc(r.product||"")}</div>
         <div style="font-size:11px;color:var(--amber);margin-top:2px;font-weight:700">⏱ ${timerStr(r.time_in)} on site</div>
       </div>
       <div style="text-align:right">
@@ -2979,8 +2980,8 @@ function renderTrucks(onsite,recent){
     const dispatch=isDispatch(r.action);
     return `<div class="card" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
       <div>
-        <div style="font-size:16px;font-weight:900;font-family:'Courier New',monospace;letter-spacing:1.5px">${r.reg||"—"}</div>
-        <div style="font-size:11px;color:var(--muted);margin-top:2px">${r.customer||""} · ${r.product||""}</div>
+        <div style="font-size:16px;font-weight:900;font-family:'Courier New',monospace;letter-spacing:1.5px">${esc(r.reg||"—")}</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px">${esc(r.customer||"")} · ${esc(r.product||"")}</div>
       </div>
       <div style="text-align:right">
         <span class="pill ${dispatch?"pill-d":"pill-r"}">${dispatch?"dispatch":"receive"}</span>
@@ -2994,7 +2995,7 @@ function renderTrucks(onsite,recent){
 
 // ── scale history drawer ─────────────────────────────────────
 async function showScaleHistory(device,name){
-  openDrawer(`<h3>${name}</h3><div class="sub">Hourly log — last 24 h</div><div class="empty">Loading…</div>`);
+  openDrawer(`<h3>${esc(name)}</h3><div class="sub">Hourly log — last 24 h</div><div class="empty">Loading…</div>`);
   const since=new Date(Date.now()-24*3600*1000).toISOString();
   const s=SCALES.find(x=>x.device===device);
   if(s&&s.role==="weighbridge"){
@@ -3003,7 +3004,7 @@ async function showScaleHistory(device,name){
     if(!rows.length){ $("drawerContent").querySelector(".empty").textContent="No data yet"; return; }
     const tbl=rows.slice(0,20).map(r=>`<tr><td>${hhmm(r.ts)}</td><td class="num">${nz(r.weight)} kg</td>
       <td>${r.stable?'<span class="pill pill-d">stable</span>':'<span class="pill pill-o">moving</span>'}</td></tr>`).join("");
-    $("drawerContent").innerHTML=`<h3>${name}</h3><div class="sub">Recent weight readings</div>
+    $("drawerContent").innerHTML=`<h3>${esc(name)}</h3><div class="sub">Recent weight readings</div>
       <div class="tbl-wrap"><table><thead><tr><th>Time</th><th>Weight</th><th>Status</th></tr></thead><tbody>${tbl}</tbody></table></div>`;
     return;
   }
