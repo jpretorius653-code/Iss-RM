@@ -2512,7 +2512,7 @@ async function genBelt(from,to){
   const fISO=from.toISOString(), tISO=to.toISOString();
   const per={};
   await Promise.all(belts.map(async s=>{
-    try{ per[s.device]=await sbAll(`hourly?select=hour,opening,closing,tons&device=eq.${encodeURIComponent(s.device)}&hour=gte.${fISO}&hour=lte.${tISO}&order=hour.asc,id.asc`); }
+    try{ per[s.device]=await sbAll(`hourly?select=hour,opening,closing,tons,flag,gap_tons&device=eq.${encodeURIComponent(s.device)}&hour=gte.${fISO}&hour=lte.${tISO}&order=hour.asc,id.asc`); }
     catch(e){ per[s.device]=[]; }
   }));
   const feeds=belts.filter(s=>s.role==="feed"), prods=belts.filter(s=>s.role==="product"), discs=belts.filter(s=>s.role==="discard");
@@ -2546,20 +2546,31 @@ async function genBelt(from,to){
     return Object.values(byHour).filter(t=>t>0).length; };
   const combined=days.map(dk=>{ const f=feeds.reduce((a,s)=>a+scaleDayTons(s,dk),0), p=prods.reduce((a,s)=>a+scaleDayTons(s,dk),0), d=discs.reduce((a,s)=>a+scaleDayTons(s,dk),0), fh=feedHoursForDay(dk);
     return {day:dk, feed:f, product:p, discard:d, feedHrs:fh, avgFeed:fh>0?f/fh:0, yield:f>0?p/f*100:0, prodY:f>0?p/f*100:0, discY:f>0?d/f*100:0, slurY:f>0?(f-p-d)/f*100:0}; });
+  // Data quality per shift-day: how many clock-hours any belt logged, and what was NOT counted.
+  const quality={};
+  days.forEach(dk=>{ quality[dk]={hrs:new Set(), gaps:0, resets:0, gapT:0}; });
+  belts.forEach(s=>(per[s.device]||[]).forEach(h=>{ const q=quality[shiftInfo(new Date(h.hour)).dayKey]; if(!q) return;
+    q.hrs.add(new Date(h.hour).getTime());
+    if(h.flag==='gap') q.gaps++; if(h.flag==='reset') q.resets++; q.gapT+=Number(h.gap_tons)||0; }));
+  const dataCell=dk=>{ const q=quality[dk]; if(!q) return '<td>--</td>'; const n=q.hrs.size, bad=n<24||q.gaps||q.resets;
+    const tip=[q.gaps?q.gaps+' outage(s)':'', q.resets?q.resets+' totalizer reset(s)':'', q.gapT>0?fmt(q.gapT,0)+' t not counted':''].filter(Boolean).join(' · ');
+    return `<td class="num" title="${esc(tip)}" style="color:${bad?'var(--amber)':'var(--green)'}">${bad?'⚠ ':''}${n}/24 h</td>`; };
+  const gapTotals=belts.map(s=>({name:s.name, t:(per[s.device]||[]).reduce((a,h)=>a+(Number(h.gap_tons)||0),0), rs:(per[s.device]||[]).filter(h=>h.flag==='reset').length})).filter(x=>x.t>0||x.rs>0);
+  const gapNote=gapTotals.length?`<div style="font-size:11px;color:var(--amber);margin-top:8px">⚠ Not counted in the figures above (scale offline over 6 h or totalizer reset): ${gapTotals.map(x=>esc(x.name)+(x.t>0?' '+fmt(x.t,0)+' t':'')+(x.rs?' · '+x.rs+' reset(s)':'')).join('; ')}. Hours marked ⚠ have incomplete data.</div>`:'';
   const totFeed=combined.reduce((a,c)=>a+c.feed,0), totFeedHrs=combined.reduce((a,c)=>a+c.feedHrs,0);
   const avgFeedAll=totFeedHrs>0?totFeed/totFeedHrs:0;
-  REPORT={type:"belt", belts, per, days, combined, feeds, prods, srcRows};
+  REPORT={type:"belt", belts, per, days, combined, feeds, prods, srcRows, quality};
   $("rptChart").innerHTML = barChart(combined);
   const rows=combined.slice().reverse().map(d=>`<tr><td>${dLabel(d.day)}</td>
     <td class="num" style="font-weight:700">${fmt(d.feed,1)}</td>
     <td class="num">${d.feedHrs>0?fmt(d.avgFeed,1):'--'}</td>
     <td class="num" style="color:${d.prodY>=60?'var(--green)':'var(--amber)'}">${d.feed>0?fmt(d.prodY,1)+'%':'--'}</td>
     <td class="num">${d.feed>0?fmt(d.discY,1)+'%':'--'}</td>
-    <td class="num">${d.feed>0?fmt(d.slurY,1)+'%':'--'}</td></tr>`).join("");
+    <td class="num">${d.feed>0?fmt(d.slurY,1)+'%':'--'}</td>${dataCell(d.day)}</tr>`).join("");
   $("rptBody").innerHTML=`<div class="eyebrow">Daily summary</div>
     <div style="font-size:12px;color:var(--muted);margin:-2px 0 8px">Average feed <b style="color:var(--ink)">${totFeedHrs>0?fmt(avgFeedAll,1):'--'} t/h</b> over ${totFeedHrs} production hour${totFeedHrs===1?'':'s'} (hours the feed belt actually fed)</div>
-    <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Feed t</th><th>Feed t/h</th><th>Product %</th><th>Discard %</th><th>Slurry/spiral %</th></tr></thead>
-    <tbody>${rows||'<tr><td colspan="6" class="empty">No data in range</td></tr>'}</tbody></table></div>`+srcTbl;
+    <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Feed t</th><th>Feed t/h</th><th>Product %</th><th>Discard %</th><th>Slurry/spiral %</th><th>Data</th></tr></thead>
+    <tbody>${rows||'<tr><td colspan="7" class="empty">No data in range</td></tr>'}</tbody></table></div>`+gapNote+srcTbl;
   $("rptStatus").textContent=`${days.length} day(s) · ${belts.length} scale(s)`;
 }
 
@@ -2621,8 +2632,9 @@ function exportReportCSV(){
     REPORT.rows.forEach(r=>rows.push([r.time_in?dLabel(new Date(r.time_in).getTime()):"", r.time_in?hLabel(new Date(r.time_in)):"", r.time_out?hLabel(new Date(r.time_out)):"", r.ticket||"", r.batch_no||"", r.reg||"", r.transporter||"", r.customer||"", r.supplier||"", r.destination||"", r.driver||"", r.product||"", r.net==null?"":r.net, r.empty_weight==null?"":r.empty_weight]));
     csvDownload("weighbridge_report.csv", rows);
   } else {
-    const rows=[["Date","Feed t","Feed t/h","Product t","Discard t","Product %","Discard %","Slurry/spiral %"]];
-    REPORT.combined.forEach(d=>rows.push([dLabel(d.day), d.feed.toFixed(1), d.feedHrs>0?d.avgFeed.toFixed(1):"", d.product.toFixed(1), (d.discard||0).toFixed(1), d.feed>0?d.prodY.toFixed(1):"", d.feed>0?d.discY.toFixed(1):"", d.feed>0?d.slurY.toFixed(1):""]));
+    const rows=[["Date","Feed t","Feed t/h","Product t","Discard t","Product %","Discard %","Slurry/spiral %","Hours logged","Outages","Resets","Tonnes not counted"]];
+    const dq=d=>{ const q=(REPORT.quality||{})[d.day]; return q?[q.hrs.size,q.gaps,q.resets,q.gapT.toFixed(1)]:["","","",""]; };
+    REPORT.combined.forEach(d=>rows.push([dLabel(d.day), d.feed.toFixed(1), d.feedHrs>0?d.avgFeed.toFixed(1):"", d.product.toFixed(1), (d.discard||0).toFixed(1), d.feed>0?d.prodY.toFixed(1):"", d.feed>0?d.discY.toFixed(1):"", d.feed>0?d.slurY.toFixed(1):"", ...dq(d)]));
     if(REPORT.srcRows && REPORT.srcRows.length){
       rows.push([]); rows.push(["By source","RD","Feed t","Product t","Discard t","Product %","Discard %","Slurry/spiral %"]);
       REPORT.srcRows.forEach(o=>rows.push([o.source, o.rd!=null?Number(o.rd).toFixed(2):"", o.feed.toFixed(1), o.product.toFixed(1), (o.discard||0).toFixed(1), o.feed>0?o.prodY.toFixed(1):"", o.feed>0?o.discY.toFixed(1):"", o.feed>0?o.slurY.toFixed(1):""]));
@@ -2867,8 +2879,9 @@ function exportXLSX(){
         aoa.push([dLabel(hr.getTime()), hLabel(hr), si.name, h.opening, h.closing, +(h.tons||0).toFixed(1)]); });
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), safeSheet(s.name));
     });
-    const comb=[["Date","Feed t","Feed t/h","Product t","Discard t","Product %","Discard %","Slurry/spiral %"]];
-    REPORT.combined.forEach(d=>comb.push([dLabel(d.day), +d.feed.toFixed(1), d.feedHrs>0?+d.avgFeed.toFixed(1):"", +d.product.toFixed(1), +(d.discard||0).toFixed(1), d.feed>0?+d.prodY.toFixed(1):"", d.feed>0?+d.discY.toFixed(1):"", d.feed>0?+d.slurY.toFixed(1):""]));
+    const comb=[["Date","Feed t","Feed t/h","Product t","Discard t","Product %","Discard %","Slurry/spiral %","Hours logged","Outages","Resets","Tonnes not counted"]];
+    const dqx=d=>{ const q=(REPORT.quality||{})[d.day]; return q?[q.hrs.size,q.gaps,q.resets,+q.gapT.toFixed(1)]:["","","",""]; };
+    REPORT.combined.forEach(d=>comb.push([dLabel(d.day), +d.feed.toFixed(1), d.feedHrs>0?+d.avgFeed.toFixed(1):"", +d.product.toFixed(1), +(d.discard||0).toFixed(1), d.feed>0?+d.prodY.toFixed(1):"", d.feed>0?+d.discY.toFixed(1):"", d.feed>0?+d.slurY.toFixed(1):"", ...dqx(d)]));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(comb), "Combined");
     if(REPORT.srcRows && REPORT.srcRows.length){
       const sa=[["Source","RD","Feed t","Product t","Discard t","Product %","Discard %","Slurry/spiral %"]];
