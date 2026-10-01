@@ -1,0 +1,4 @@
+# never commit signing keys or secrets
+*.pem
+*.key
+.env
