@@ -6,7 +6,9 @@ time, in order, and check the dashboard after each.
 | File | Fixes | Risk |
 |------|-------|------|
 | 01_lock_down_functions.sql | Maintenance + admin functions callable by anyone with the public key | Low. pg_cron runs as `postgres` and is unaffected. |
-| 02_hourly_ledger_chain.sql | Tonnage lost across outages; `snapshot_hourly` and `repair_hourly_chain` disagreeing; silent totalizer resets | Medium. Rewrites `tons` on existing rows when `repair_hourly_chain()` is run — back up `hourly` first. |
+| 02_hourly_ledger_chain.sql (applied, incl. 02b `gap_tons`) | Tonnage lost across outages; `snapshot_hourly` and `repair_hourly_chain` disagreeing; silent totalizer resets | Medium. Rewrites `tons` on existing rows when `repair_hourly_chain()` is run — back up `hourly` first. |
+| 03_remote_firmware.sql | Remote firmware + config tables for the ESP32 boxes | Low (additive). DRAFT — apply after the signing key exists. |
+| 04_alerts.sql | Server-side alerts every 5 min (silent scale/gateway, totalizer reset, stale open truck, silent site) | Low (additive). APPLIED. |
 
 ## Deliberately NOT drafted yet
 
