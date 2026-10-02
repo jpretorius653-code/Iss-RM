@@ -305,6 +305,15 @@ th:first-child,td:first-child{text-align:left}
 th{color:var(--muted);font-size:10px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;
    position:sticky;top:0;background:var(--panel)}
 .tbl-wrap{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;max-height:55vh;overflow-y:auto}
+.alertbar{border-bottom:1px solid var(--line);background:#1a1416;font-size:12px}
+.alertbar .ah{display:flex;align-items:center;gap:8px;padding:8px 12px;cursor:pointer}
+.alertbar.crit{background:#2a1218;border-bottom-color:rgba(242,100,122,.5)}
+.alertbar .al{padding:6px 12px 10px;display:none}
+.alertbar.open .al{display:block}
+.alertbar .ar{display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-top:1px solid rgba(255,255,255,.06)}
+.alertbar .ar b{flex:1;font-weight:600}
+.alertbar .ar.acked{opacity:.5}
+.alertbar button{background:none;border:1px solid #556;color:#9fb2c4;border-radius:6px;padding:3px 9px;font-size:11px}
 .pill{font-size:9px;padding:2px 7px;border-radius:20px;font-weight:700;letter-spacing:.5px;white-space:nowrap;border:1px solid}
 .pill-d{color:var(--cyan);border-color:rgba(41,171,226,.3)}
 .pill-r{color:var(--green);border-color:rgba(62,207,142,.3)}
@@ -427,6 +436,8 @@ input[readonly]{border-color:var(--line);color:var(--muted)}
     <span id="conn" class="err"><i class="dot"></i>offline</span>
   </div>
 </div>
+
+<div id="alertBar" class="alertbar" style="display:none"></div>
 
 <div id="installBanner" style="display:none;align-items:center;gap:10px;justify-content:space-between;background:#12324e;border-bottom:1px solid #1d4a6e;padding:8px 12px;font-size:13px;color:#dbe7f2">
   <span>📲 Install the ISS Monitor app for quick access</span>
@@ -778,11 +789,27 @@ const kgToT = kg => nz(kg)/1000;
 const fmtT  = (kg,d=2) => fmt(kgToT(kg),d);
 const hhmm = s => s ? new Date(s).toLocaleString([],{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}) : '—';
 
+function setConn(ok){ const c=$("conn"); if(!c) return; c.className=ok?"ok":"err"; c.innerHTML='<i class="dot"></i>'+(ok?"live":"offline"); }
+let SB_ERRS=0;   // failed requests since the current tick began — drives the live/offline badge
 async function sb(q){
-  const r = await fetch(SB_URL+"/rest/v1/"+q,{headers:authHeaders()});
+  let r;
+  try{ r = await fetch(SB_URL+"/rest/v1/"+q,{headers:authHeaders()}); }
+  catch(e){ SB_ERRS++; throw e; }
   if(r.status===401 || r.status===403){ showLogin("Session expired — please sign in again."); throw new Error(r.status); }
-  if(!r.ok) throw new Error(r.status);
+  if(!r.ok){ SB_ERRS++; throw new Error(r.status); }
   return r.json();
+}
+// PostgREST caps every response (default 1000 rows) whatever limit= says, so a
+// big report must be fetched page by page or it is silently truncated.
+async function sbAll(q){
+  const PAGE=1000, base=q.replace(/&limit=\d+/,"");
+  let out=[];
+  for(let off=0; off<1000000; off+=PAGE){
+    const rows=await sb(base+`&limit=${PAGE}&offset=${off}`);
+    out=out.concat(rows);
+    if(rows.length<PAGE) break;
+  }
+  return out;
 }
 
 // ════════════════════════════════════════════════════════════
@@ -796,7 +823,7 @@ async function sb(q){
 //  site login may only READ this table and every save comes back 403.
 //  fleetGate() says so in plain language instead of failing silently.
 // ════════════════════════════════════════════════════════════
-const DASH_BUILD="2026-08-30a";      // bump on every deploy
+const DASH_BUILD="2026-09-30a";      // bump on every deploy
 try{ console.log("ISS Remote Monitor — build "+DASH_BUILD); }catch(e){}
 let FLEET=[], FLEET_SITE="", FLEET_EDIT=null, FLEET_PENDING=null, FLEET_RO=false;
 
@@ -1020,8 +1047,9 @@ async function sbUpsert(path, body){
   if(!r.ok){ let d=""; try{ d=(await r.text()).slice(0,200); }catch(e){}
              throw new Error(r.status+(d?": "+d:"")); }
 }
+function jq(v){ return esc(JSON.stringify(String(v==null?"":v))); }   // safe JS string literal inside an HTML attribute
 function esc(v){ return String(v==null?"":v)
-  .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+  .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;"); }
 // ── template / import / export ───────────────────────────────
 // Same columns and the same header matching as the weighbridge app, so one
 // sheet works in both places. XLSX is written with STORED zip entries — no
@@ -1304,7 +1332,7 @@ async function loadOrders(){
   try{
     // Only completed tickets count. An open ticket is a truck on the
     // weighbridge, not tonnage delivered.
-    const rows=await sb("transactions?select=order_no,net,action&status=eq.complete&order_no=not.is.null"+sf+"&limit=5000");
+    const rows=await sbAll("transactions?select=order_no,net,action&status=eq.complete&order_no=not.is.null"+sf+"&order=time_out.asc,id.asc");
     rows.forEach(r=>{
       const k=String(r.order_no||"").trim(); if(!k) return;
       const t=Number(r.net)||0;
@@ -1363,10 +1391,10 @@ function renderOrders(){
                     :`${fmt(Math.max(0,p.target-p.done),1)} t remaining`}</span>
       </div>`}
       <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
-        <button onclick="showOrder('${esc(o.order_no)}')" style="flex:1;min-width:90px;background:none;border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:7px;font-size:12px">Tickets</button>
-        <button onclick="openOrderForm('${esc(o.order_no)}')" style="flex:1;min-width:70px;background:none;border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:7px;font-size:12px">Edit</button>
-        <button onclick="retireOrder('${esc(o.order_no)}',${o.active===false})" style="flex:1;min-width:70px;background:none;border:1px solid var(--gold);color:var(--gold);border-radius:8px;padding:7px;font-size:12px">${o.active===false?"Reopen":"Retire"}</button>
-        <button onclick="deleteOrder('${esc(o.order_no)}')" style="background:none;border:1px solid rgba(242,100,122,.4);color:var(--red);border-radius:8px;padding:7px 12px;font-size:12px">Delete</button>
+        <button onclick="showOrder(${jq(o.order_no)})" style="flex:1;min-width:90px;background:none;border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:7px;font-size:12px">Tickets</button>
+        <button onclick="openOrderForm(${jq(o.order_no)})" style="flex:1;min-width:70px;background:none;border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:7px;font-size:12px">Edit</button>
+        <button onclick="retireOrder(${jq(o.order_no)},${o.active===false})" style="flex:1;min-width:70px;background:none;border:1px solid var(--gold);color:var(--gold);border-radius:8px;padding:7px;font-size:12px">${o.active===false?"Reopen":"Retire"}</button>
+        <button onclick="deleteOrder(${jq(o.order_no)})" style="background:none;border:1px solid rgba(242,100,122,.4);color:var(--red);border-radius:8px;padding:7px 12px;font-size:12px">Delete</button>
       </div>
     </div>`;
   }).join("");
@@ -1550,7 +1578,7 @@ async function showOrder(no){
   const disp=rows.filter(r=>isDispatch(r.action)), recv=rows.filter(r=>!isDispatch(r.action));
   const sum=a=>a.reduce((t,r)=>t+nz(r.net),0);
   const body=rows.length ? rows.map(r=>`<tr>
-      <td>${r.ticket||"--"}</td>
+      <td>${esc(r.ticket||"--")}</td>
       <td style="font-family:monospace">${esc(r.reg||"--")}</td>
       <td>${esc(r.transporter||"--")}</td>
       <td><span class="pill ${isDispatch(r.action)?"pill-d":"pill-r"}">${isDispatch(r.action)?"disp":"recv"}</span></td>
@@ -1727,10 +1755,13 @@ function nav(btn){
 async function sbPatch(path, body){
   const r = await fetch(SB_URL+"/rest/v1/"+path, {
     method:"PATCH",
-    headers:{...authHeaders(), "Content-Type":"application/json", "Prefer":"return=minimal"},
+    headers:{...authHeaders(), "Content-Type":"application/json", "Prefer":"return=representation"},
     body: JSON.stringify(body)
   });
   if(!r.ok) throw new Error(r.status);
+  // RLS filters a forbidden row out silently: 200 with zero rows updated.
+  const done = await r.json().catch(()=>[]);
+  if(Array.isArray(done) && !done.length) throw new Error("no row updated — not permitted or already removed");
 }
 
 async function sbPost(path, body){
@@ -1762,7 +1793,7 @@ async function loadSources(){
   SRC_SIG=sig;
   const cur = CUR_SRC && CUR_SRC.source;
   sel.innerHTML = '<option value="">— source —</option>' +
-    SRC_LIST.map(s=>`<option value="${(s.name||'').replace(/"/g,'&quot;')}"${s.name===cur?' selected':''}>${s.name}</option>`).join("");
+    SRC_LIST.map(s=>`<option value="${(s.name||'').replace(/"/g,'&quot;')}"${s.name===cur?' selected':''}>${esc(s.name)}</option>`).join("");
 }
 async function refreshCurrentSource(){
   if(SRC_LIST===null) await loadSources();
@@ -1876,7 +1907,7 @@ async function loadAdminUsers(){
       <td>${u.site?esc(u.site):(u.is_admin?'<span style="color:#29ABE2">all sites</span>':'<span style="color:#f0c674">none</span>')}</td>
       <td>${u.is_admin?"ISS admin":(u.customer?`<span style="color:var(--gold2)">customer</span><br><span style="font-size:11px;color:var(--muted)">${esc(u.customer)}</span>`:"site")}</td>
       <td>${u.last_sign_in?new Date(u.last_sign_in).toLocaleDateString():"never"}</td>
-      <td style="text-align:right">${u.linked?`<button class="fbtn sm dngr" onclick="adminUnlink('${esc(u.email)}')">Unlink</button>`:""}</td>
+      <td style="text-align:right">${u.linked?`<button class="fbtn sm dngr" onclick="adminUnlink(${jq(u.email)})">Unlink</button>`:""}</td>
     </tr>`).join("")}</tbody></table></div></div>`;
 }
 /* The names that actually appear on tickets at this site, commonest first.
@@ -2011,7 +2042,7 @@ async function renderSrcMgr(){
   try{ rows = await sb(`sources?select=id,name,site,active&or=(site.eq.${enc},site.is.null)&order=name.asc`); }catch(e){}
   if(!rows.length){ list.innerHTML='<div class="empty">No sources yet — add one above.</div>'; return; }
   list.innerHTML = rows.map(r=>`<div class="scale-card" style="text-align:left;display:flex;justify-content:space-between;align-items:center;gap:10px">
-      <div><b>${(r.name||'').replace(/</g,'&lt;')}</b> <span style="font-size:11px;color:var(--muted)">${r.site||'all sites'}${r.active?'':' · inactive'}</span></div>
+      <div><b>${esc(r.name||'')}</b> <span style="font-size:11px;color:var(--muted)">${esc(r.site||'all sites')}${r.active?'':' · inactive'}</span></div>
       <button onclick="delSource(${r.id})" style="padding:7px 11px;border:1px solid var(--red);border-radius:7px;background:none;color:var(--red)">Remove</button>
     </div>`).join("");
 }
@@ -2142,19 +2173,19 @@ function scaleCardHTML(s){
   // reach r.rate below.
   const on = (stt==="live") && !!r;
   const dc = dotClass(r,s), st = statusText(r,s);
-  const siteTag = (s.site && s.site!=="") ? `<span style="font-size:10px;color:var(--muted)">${s.site}</span>` : '';
+  const siteTag = (s.site && s.site!=="") ? `<span style="font-size:10px;color:var(--muted)">${esc(s.site)}</span>` : '';
   // Red is for a board nobody can reach. A stopped belt on a live gateway is
   // amber — it needs no callout.
   const border = (stt==="live") ? 'var(--line)' : (stt==="idle" ? 'var(--amber)' : 'var(--red)');
   if(s.role==="weighbridge"){
-    return `<div class="scale-card" style="border-color:${border}" onclick="showScaleHistory('${s.device}','${s.name}')">
-      <div class="sc-name"><span class="sc-title">${s.name}</span><span class="sc-right">${siteTag}<span class="dot ${dc}"></span></span></div>
+    return `<div class="scale-card" style="border-color:${border}" onclick="showScaleHistory(${jq(s.device)},${jq(s.name)})">
+      <div class="sc-name"><span class="sc-title">${esc(s.name)}</span><span class="sc-right">${siteTag}<span class="dot ${dc}"></span></span></div>
       <div class="sc-rate num">${on?nz(r.weight):"--"}<span class="sc-unit"> kg</span></div>
       <div class="sc-subs"><span style="font-size:11px;color:var(--muted)">${st}</span></div>
     </div>`;
   }
-  return `<div class="scale-card" style="border-color:${border}" onclick="showScaleHistory('${s.device}','${s.name}')">
-    <div class="sc-name"><span class="sc-title">${s.name}</span><span class="sc-right">${siteTag}<span class="dot ${dc}"></span></span></div>
+  return `<div class="scale-card" style="border-color:${border}" onclick="showScaleHistory(${jq(s.device)},${jq(s.name)})">
+    <div class="sc-name"><span class="sc-title">${esc(s.name)}</span><span class="sc-right">${siteTag}<span class="dot ${dc}"></span></span></div>
     <div class="sc-rate num">${on?fmt(r.rate):"--"}<span class="sc-unit"> t/h</span></div>
     <div class="sc-subs">
       <span>Speed <b class="num">${on?fmt(nz(r.speed),2):"--"}</b> m/s</span>
@@ -2191,7 +2222,7 @@ async function renderAdminSites(){
   try{ opts=await fleetSiteOptions(); }catch(e){ opts=[]; }
   const cur=String(MY_SITE||"").trim().toLowerCase();
   const btn=(code,label,sub)=>`<button class="site-btn${cur===code?" on":""}"
-      onclick="adminUseSite('${String(code).replace(/'/g,"\\'")}')">
+      onclick="adminUseSite(${jq(code)})">
       <b>${esc(label)}</b><small>${esc(sub)}</small></button>`;
   el.innerHTML = btn("", "All sites", cur===""?"viewing":"whole estate")
     + opts.map(c=>btn(c, siteTitle(c)||c, cur===c ? "viewing" : c)).join("");
@@ -2286,7 +2317,7 @@ async function refreshYield15(){
   // watchdog dropouts) doesn't under-count its delta and inflate the ratio.
   const roleRate=async arr=>{
     const sets=await Promise.all(arr.map(async s=>{
-      try{ return await sb(`readings?select=total,ts&device=eq.${encodeURIComponent(s.device)}&ts=gte.${since}&order=ts.asc`); }catch(e){ return []; }
+      try{ return await sb(`readings?select=total,ts&device=eq.${encodeURIComponent(s.device)}&ts=gte.${since}&order=ts.asc,id.asc`); }catch(e){ return []; }
     }));
     let dtot=0, minT=Infinity, maxT=-Infinity, any=false;
     sets.forEach(rows=>{
@@ -2353,11 +2384,10 @@ async function refreshScales(){
   try{ await refreshPlantHourly(); }catch(e){}
 
   // connection badge
-  $("conn").className="ok"; $("conn").innerHTML='<i class="dot"></i>live';
+  setConn(SB_ERRS===0);
   const ts = new Date().toLocaleTimeString();
   $("plantStatus").textContent = `Updated ${ts} · ${SCALES.length} scale${SCALES.length!==1?"s":""} found`;
   $("scalesStatus").textContent = `Updated ${ts} · ${SCALES.length} scale${SCALES.length!==1?"s":""} found`;
-  $("conn").className="ok"; $("conn").innerHTML='<i class="dot"></i>live';
 }
 
 async function refreshPlantHourly(){
@@ -2366,7 +2396,7 @@ async function refreshPlantHourly(){
   const since=new Date(Date.now()-48*3600*1000).toISOString();
   const per={};
   await Promise.all(belts.map(async s=>{
-    try{ per[s.device]=await sb(`hourly?select=hour,tons&device=eq.${encodeURIComponent(s.device)}&hour=gte.${since}&order=hour.asc`); }
+    try{ per[s.device]=await sb(`hourly?select=hour,tons&device=eq.${encodeURIComponent(s.device)}&hour=gte.${since}&order=hour.asc,id.asc`); }
     catch(e){ per[s.device]=[]; }
   }));
   const feeds=belts.filter(s=>s.role==="feed"), prods=belts.filter(s=>s.role==="product"), discs=belts.filter(s=>s.role==="discard");
@@ -2433,7 +2463,7 @@ function dLabel(ms){ return new Date(ms).toLocaleDateString([], {day:'2-digit',m
 function hLabel(d){ return d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}); }
 async function hourlyData(device, days){
   const since=new Date(Date.now()-days*24*3600*1000).toISOString();
-  const rows=await sb(`readings?select=total,speed,ts&device=eq.${device}&ts=gte.${since}&order=ts.asc&limit=20000`);
+  const rows=await sbAll(`readings?select=total,speed,ts&device=eq.${device}&ts=gte.${since}&order=ts.asc,id.asc`);
   const b={};
   for(const r of rows){
     const d=new Date(r.ts); d.setMinutes(0,0,0); const k=d.getTime();
@@ -2467,8 +2497,9 @@ function setDays(d){  // used at boot to default the date inputs
   const to=new Date(); const from=new Date();
   if(d>0) from.setDate(from.getDate()-d);
   const F=$("rFrom"), T=$("rTo");
-  if(F) F.value=from.toISOString().slice(0,10);
-  if(T) T.value=to.toISOString().slice(0,10);
+  const ymd=d=>d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");  // local date, not UTC
+  if(F) F.value=ymd(from);
+  if(T) T.value=ymd(to);
 }
 function loadReports(){ const F=$("rFrom"); if(F && !F.value) setDays(0); toggleWbFilters(); }  // init only
 function toggleWbFilters(){ const w=$("wbFilters"); if(w) w.style.display = ($("rType").value==="wb")?"":"none"; }
@@ -2479,6 +2510,10 @@ async function genReport(){
   const to=new Date($("rTo").value+"T23:59:59");
   if(isNaN(from)||isNaN(to)){ $("rptStatus").textContent="Pick a valid From and To date."; return; }
   $("rptBody").innerHTML='<div class="empty">Generating…</div>'; $("rptChart").innerHTML='';
+  if(type!=="wb"){  // shift-days run 06:00→06:00, so the window must too
+    from.setHours(6,0,0,0);
+    to.setDate(to.getDate()+1); to.setHours(5,59,59,0);
+  }
   return (type==="wb") ? genWeighbridge(from,to) : genBelt(from,to);
 }
 
@@ -2488,13 +2523,13 @@ async function genBelt(from,to){
   const fISO=from.toISOString(), tISO=to.toISOString();
   const per={};
   await Promise.all(belts.map(async s=>{
-    try{ per[s.device]=await sb(`hourly?select=hour,opening,closing,tons&device=eq.${encodeURIComponent(s.device)}&hour=gte.${fISO}&hour=lte.${tISO}&order=hour.asc`); }
+    try{ per[s.device]=await sbAll(`hourly?select=hour,opening,closing,tons,flag,gap_tons&device=eq.${encodeURIComponent(s.device)}&hour=gte.${fISO}&hour=lte.${tISO}&order=hour.asc,id.asc`); }
     catch(e){ per[s.device]=[]; }
   }));
   const feeds=belts.filter(s=>s.role==="feed"), prods=belts.filter(s=>s.role==="product"), discs=belts.filter(s=>s.role==="discard");
   // Source/RD allocation — map each hour's tonnes to the source active then (per site)
   let slog=[];
-  try{ slog = await sb(`source_log?select=site,source,rd,started_at&started_at=lte.${tISO}&order=started_at.desc&limit=5000`); }catch(e){}
+  try{ slog = await sbAll(`source_log?select=site,source,rd,started_at&started_at=lte.${tISO}&order=started_at.desc,id.desc`); }catch(e){}
   const activeSrc=(site,ts)=>{ for(const e of slog){ const es=e.site||""; if((es===(site||"")||es==="") && new Date(e.started_at).getTime()<=ts) return e; } return null; };
   const bySrc={};
   const allocSrc=(s,role)=>{ (per[s.device]||[]).forEach(h=>{
@@ -2522,20 +2557,31 @@ async function genBelt(from,to){
     return Object.values(byHour).filter(t=>t>0).length; };
   const combined=days.map(dk=>{ const f=feeds.reduce((a,s)=>a+scaleDayTons(s,dk),0), p=prods.reduce((a,s)=>a+scaleDayTons(s,dk),0), d=discs.reduce((a,s)=>a+scaleDayTons(s,dk),0), fh=feedHoursForDay(dk);
     return {day:dk, feed:f, product:p, discard:d, feedHrs:fh, avgFeed:fh>0?f/fh:0, yield:f>0?p/f*100:0, prodY:f>0?p/f*100:0, discY:f>0?d/f*100:0, slurY:f>0?(f-p-d)/f*100:0}; });
+  // Data quality per shift-day: how many clock-hours any belt logged, and what was NOT counted.
+  const quality={};
+  days.forEach(dk=>{ quality[dk]={hrs:new Set(), gaps:0, resets:0, gapT:0}; });
+  belts.forEach(s=>(per[s.device]||[]).forEach(h=>{ const q=quality[shiftInfo(new Date(h.hour)).dayKey]; if(!q) return;
+    q.hrs.add(new Date(h.hour).getTime());
+    if(h.flag==='gap') q.gaps++; if(h.flag==='reset') q.resets++; q.gapT+=Number(h.gap_tons)||0; }));
+  const dataCell=dk=>{ const q=quality[dk]; if(!q) return '<td>--</td>'; const n=q.hrs.size, bad=n<24||q.gaps||q.resets;
+    const tip=[q.gaps?q.gaps+' outage(s)':'', q.resets?q.resets+' totalizer reset(s)':'', q.gapT>0?fmt(q.gapT,0)+' t not counted':''].filter(Boolean).join(' · ');
+    return `<td class="num" title="${esc(tip)}" style="color:${bad?'var(--amber)':'var(--green)'}">${bad?'⚠ ':''}${n}/24 h</td>`; };
+  const gapTotals=belts.map(s=>({name:s.name, t:(per[s.device]||[]).reduce((a,h)=>a+(Number(h.gap_tons)||0),0), rs:(per[s.device]||[]).filter(h=>h.flag==='reset').length})).filter(x=>x.t>0||x.rs>0);
+  const gapNote=gapTotals.length?`<div style="font-size:11px;color:var(--amber);margin-top:8px">⚠ Not counted in the figures above (scale offline over 6 h or totalizer reset): ${gapTotals.map(x=>esc(x.name)+(x.t>0?' '+fmt(x.t,0)+' t':'')+(x.rs?' · '+x.rs+' reset(s)':'')).join('; ')}. Hours marked ⚠ have incomplete data.</div>`:'';
   const totFeed=combined.reduce((a,c)=>a+c.feed,0), totFeedHrs=combined.reduce((a,c)=>a+c.feedHrs,0);
   const avgFeedAll=totFeedHrs>0?totFeed/totFeedHrs:0;
-  REPORT={type:"belt", belts, per, days, combined, feeds, prods, srcRows};
+  REPORT={type:"belt", belts, per, days, combined, feeds, prods, srcRows, quality};
   $("rptChart").innerHTML = barChart(combined);
   const rows=combined.slice().reverse().map(d=>`<tr><td>${dLabel(d.day)}</td>
     <td class="num" style="font-weight:700">${fmt(d.feed,1)}</td>
     <td class="num">${d.feedHrs>0?fmt(d.avgFeed,1):'--'}</td>
     <td class="num" style="color:${d.prodY>=60?'var(--green)':'var(--amber)'}">${d.feed>0?fmt(d.prodY,1)+'%':'--'}</td>
     <td class="num">${d.feed>0?fmt(d.discY,1)+'%':'--'}</td>
-    <td class="num">${d.feed>0?fmt(d.slurY,1)+'%':'--'}</td></tr>`).join("");
+    <td class="num">${d.feed>0?fmt(d.slurY,1)+'%':'--'}</td>${dataCell(d.day)}</tr>`).join("");
   $("rptBody").innerHTML=`<div class="eyebrow">Daily summary</div>
     <div style="font-size:12px;color:var(--muted);margin:-2px 0 8px">Average feed <b style="color:var(--ink)">${totFeedHrs>0?fmt(avgFeedAll,1):'--'} t/h</b> over ${totFeedHrs} production hour${totFeedHrs===1?'':'s'} (hours the feed belt actually fed)</div>
-    <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Feed t</th><th>Feed t/h</th><th>Product %</th><th>Discard %</th><th>Slurry/spiral %</th></tr></thead>
-    <tbody>${rows||'<tr><td colspan="6" class="empty">No data in range</td></tr>'}</tbody></table></div>`+srcTbl;
+    <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Feed t</th><th>Feed t/h</th><th>Product %</th><th>Discard %</th><th>Slurry/spiral %</th><th>Data</th></tr></thead>
+    <tbody>${rows||'<tr><td colspan="7" class="empty">No data in range</td></tr>'}</tbody></table></div>`+gapNote+srcTbl;
   $("rptStatus").textContent=`${days.length} day(s) · ${belts.length} scale(s)`;
 }
 
@@ -2558,7 +2604,10 @@ function barChart(combined){
 async function genWeighbridge(from,to){
   const fISO=from.toISOString(), tISO=to.toISOString();
   // server-side filters that map cleanly to columns
-  let q=`transactions?select=*&time_in=gte.${fISO}&time_in=lte.${tISO}&order=time_in.desc&limit=5000`;
+  // Dated by time_out (when the ticket completed) — same as the site's own export.
+  let q=`transactions?select=*&status=eq.complete&time_out=gte.${fISO}&time_out=lte.${tISO}&order=time_out.desc,id.desc`;
+  const rsite=String(MY_SITE||plantSite()||"").trim();
+  if(rsite) q+=`&site=eq.${encodeURIComponent(rsite)}`;
   const ilike=(col,val)=>{ if(val && val.trim()) return `&${col}=ilike.*${encodeURIComponent(val.trim())}*`; return ""; };
   q+=ilike("ticket",$("fTicket")?.value);
   q+=ilike("batch_no",$("fBatch")?.value);
@@ -2566,7 +2615,8 @@ async function genWeighbridge(from,to){
   q+=ilike("customer",$("fCustomer")?.value);
   q+=ilike("product",$("fProduct")?.value);
   let rows=[];
-  try{ rows=await sb(q); }catch(e){}
+  try{ rows=await sbAll(q); }
+  catch(e){ $("rptBody").innerHTML='<div class="empty">Could not load transactions — check your connection and try again.</div>'; $("rptStatus").textContent="Load failed ("+((e&&e.message)||e)+")"; return; }
   // A ticket voided at the bridge stays in the table but never counts here.
   // Filtered in JS, not with status=neq.void, because a NULL status (older
   // Cloud Sync rows) would silently drop out of a server-side inequality.
@@ -2574,10 +2624,10 @@ async function genWeighbridge(from,to){
   rows=rows.filter(r=>String(r&&r.status||"").toLowerCase()!=="void");
   REPORT={type:"wb", rows, voided:nVoid};
   $("rptChart").innerHTML='';
-  const body=rows.map(r=>{ const ti=r.time_in?new Date(r.time_in):null, tо=r.time_out?new Date(r.time_out):null;
+  const body=rows.map(r=>{ const ti=r.time_in?new Date(r.time_in):null;
     return `<tr><td>${ti?dLabel(ti.getTime()):'--'}</td><td>${ti?hLabel(ti):'--'}</td>
-      <td>${r.ticket||'--'}</td><td>${r.batch_no||'--'}</td><td style="font-family:monospace">${r.reg||'--'}</td>
-      <td>${r.transporter||'--'}</td><td>${r.customer||'--'}</td><td>${r.product||'--'}</td>
+      <td>${esc(r.ticket||'--')}</td><td>${esc(r.batch_no||'--')}</td><td style="font-family:monospace">${esc(r.reg||'--')}</td>
+      <td>${esc(r.transporter||'--')}</td><td>${esc(r.customer||'--')}</td><td>${esc(r.product||'--')}</td>
       <td class="num">${r.net!=null?fmtT(r.net):'--'}</td></tr>`; }).join("");
   const totNet=rows.reduce((a,r)=>a+nz(r.net),0);
   $("rptBody").innerHTML=`<div class="eyebrow">Transactions (${rows.length}) · ${fmtT(totNet)} t net</div>
@@ -2593,8 +2643,9 @@ function exportReportCSV(){
     REPORT.rows.forEach(r=>rows.push([r.time_in?dLabel(new Date(r.time_in).getTime()):"", r.time_in?hLabel(new Date(r.time_in)):"", r.time_out?hLabel(new Date(r.time_out)):"", r.ticket||"", r.batch_no||"", r.reg||"", r.transporter||"", r.customer||"", r.supplier||"", r.destination||"", r.driver||"", r.product||"", r.net==null?"":r.net, r.empty_weight==null?"":r.empty_weight]));
     csvDownload("weighbridge_report.csv", rows);
   } else {
-    const rows=[["Date","Feed t","Feed t/h","Product t","Discard t","Product %","Discard %","Slurry/spiral %"]];
-    REPORT.combined.forEach(d=>rows.push([dLabel(d.day), d.feed.toFixed(1), d.feedHrs>0?d.avgFeed.toFixed(1):"", d.product.toFixed(1), (d.discard||0).toFixed(1), d.feed>0?d.prodY.toFixed(1):"", d.feed>0?d.discY.toFixed(1):"", d.feed>0?d.slurY.toFixed(1):""]));
+    const rows=[["Date","Feed t","Feed t/h","Product t","Discard t","Product %","Discard %","Slurry/spiral %","Hours logged","Outages","Resets","Tonnes not counted"]];
+    const dq=d=>{ const q=(REPORT.quality||{})[d.day]; return q?[q.hrs.size,q.gaps,q.resets,q.gapT.toFixed(1)]:["","","",""]; };
+    REPORT.combined.forEach(d=>rows.push([dLabel(d.day), d.feed.toFixed(1), d.feedHrs>0?d.avgFeed.toFixed(1):"", d.product.toFixed(1), (d.discard||0).toFixed(1), d.feed>0?d.prodY.toFixed(1):"", d.feed>0?d.discY.toFixed(1):"", d.feed>0?d.slurY.toFixed(1):"", ...dq(d)]));
     if(REPORT.srcRows && REPORT.srcRows.length){
       rows.push([]); rows.push(["By source","RD","Feed t","Product t","Discard t","Product %","Discard %","Slurry/spiral %"]);
       REPORT.srcRows.forEach(o=>rows.push([o.source, o.rd!=null?Number(o.rd).toFixed(2):"", o.feed.toFixed(1), o.product.toFixed(1), (o.discard||0).toFixed(1), o.feed>0?o.prodY.toFixed(1):"", o.feed>0?o.discY.toFixed(1):"", o.feed>0?o.slurY.toFixed(1):""]));
@@ -2839,8 +2890,9 @@ function exportXLSX(){
         aoa.push([dLabel(hr.getTime()), hLabel(hr), si.name, h.opening, h.closing, +(h.tons||0).toFixed(1)]); });
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), safeSheet(s.name));
     });
-    const comb=[["Date","Feed t","Feed t/h","Product t","Discard t","Product %","Discard %","Slurry/spiral %"]];
-    REPORT.combined.forEach(d=>comb.push([dLabel(d.day), +d.feed.toFixed(1), d.feedHrs>0?+d.avgFeed.toFixed(1):"", +d.product.toFixed(1), +(d.discard||0).toFixed(1), d.feed>0?+d.prodY.toFixed(1):"", d.feed>0?+d.discY.toFixed(1):"", d.feed>0?+d.slurY.toFixed(1):""]));
+    const comb=[["Date","Feed t","Feed t/h","Product t","Discard t","Product %","Discard %","Slurry/spiral %","Hours logged","Outages","Resets","Tonnes not counted"]];
+    const dqx=d=>{ const q=(REPORT.quality||{})[d.day]; return q?[q.hrs.size,q.gaps,q.resets,+q.gapT.toFixed(1)]:["","","",""]; };
+    REPORT.combined.forEach(d=>comb.push([dLabel(d.day), +d.feed.toFixed(1), d.feedHrs>0?+d.avgFeed.toFixed(1):"", +d.product.toFixed(1), +(d.discard||0).toFixed(1), d.feed>0?+d.prodY.toFixed(1):"", d.feed>0?+d.discY.toFixed(1):"", d.feed>0?+d.slurY.toFixed(1):"", ...dqx(d)]));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(comb), "Combined");
     if(REPORT.srcRows && REPORT.srcRows.length){
       const sa=[["Source","RD","Feed t","Product t","Discard t","Product %","Discard %","Slurry/spiral %"]];
@@ -2965,8 +3017,8 @@ function renderTrucks(onsite,recent){
   $("trucksOnsite").innerHTML = onsite.length ? onsite.map(r=>`
     <div class="card" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
       <div>
-        <div style="font-size:18px;font-weight:900;font-family:'Courier New',monospace;letter-spacing:2px">${r.reg||"—"}</div>
-        <div style="font-size:11px;color:var(--muted);margin-top:3px">${r.customer||""} · ${r.product||""}</div>
+        <div style="font-size:18px;font-weight:900;font-family:'Courier New',monospace;letter-spacing:2px">${esc(r.reg||"—")}</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:3px">${esc(r.customer||"")} · ${esc(r.product||"")}</div>
         <div style="font-size:11px;color:var(--amber);margin-top:2px;font-weight:700">⏱ ${timerStr(r.time_in)} on site</div>
       </div>
       <div style="text-align:right">
@@ -2979,8 +3031,8 @@ function renderTrucks(onsite,recent){
     const dispatch=isDispatch(r.action);
     return `<div class="card" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
       <div>
-        <div style="font-size:16px;font-weight:900;font-family:'Courier New',monospace;letter-spacing:1.5px">${r.reg||"—"}</div>
-        <div style="font-size:11px;color:var(--muted);margin-top:2px">${r.customer||""} · ${r.product||""}</div>
+        <div style="font-size:16px;font-weight:900;font-family:'Courier New',monospace;letter-spacing:1.5px">${esc(r.reg||"—")}</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px">${esc(r.customer||"")} · ${esc(r.product||"")}</div>
       </div>
       <div style="text-align:right">
         <span class="pill ${dispatch?"pill-d":"pill-r"}">${dispatch?"dispatch":"receive"}</span>
@@ -2994,7 +3046,7 @@ function renderTrucks(onsite,recent){
 
 // ── scale history drawer ─────────────────────────────────────
 async function showScaleHistory(device,name){
-  openDrawer(`<h3>${name}</h3><div class="sub">Hourly log — last 24 h</div><div class="empty">Loading…</div>`);
+  openDrawer(`<h3>${esc(name)}</h3><div class="sub">Hourly log — last 24 h</div><div class="empty">Loading…</div>`);
   const since=new Date(Date.now()-24*3600*1000).toISOString();
   const s=SCALES.find(x=>x.device===device);
   if(s&&s.role==="weighbridge"){
@@ -3003,7 +3055,7 @@ async function showScaleHistory(device,name){
     if(!rows.length){ $("drawerContent").querySelector(".empty").textContent="No data yet"; return; }
     const tbl=rows.slice(0,20).map(r=>`<tr><td>${hhmm(r.ts)}</td><td class="num">${nz(r.weight)} kg</td>
       <td>${r.stable?'<span class="pill pill-d">stable</span>':'<span class="pill pill-o">moving</span>'}</td></tr>`).join("");
-    $("drawerContent").innerHTML=`<h3>${name}</h3><div class="sub">Recent weight readings</div>
+    $("drawerContent").innerHTML=`<h3>${esc(name)}</h3><div class="sub">Recent weight readings</div>
       <div class="tbl-wrap"><table><thead><tr><th>Time</th><th>Weight</th><th>Status</th></tr></thead><tbody>${tbl}</tbody></table></div>`;
     return;
   }
@@ -3058,20 +3110,54 @@ function setSiteFilter(v){
 
 // ── main loop ────────────────────────────────────────────────
 async function tick(){
+  if(document.hidden){ setTimeout(tick,4000); return; }   // no polling from a background tab
+  SB_ERRS=0;
   try{
     await populateSiteFilter();
     await discoverScales();
     await refreshScales();
     try{ await refreshCurrentSource(); }catch(e){}
+    loadAlerts();
     if(curPage==="reports"||curPage==="trucks"){
       await loadReports();
       await loadTrucks();
     }
   }catch(e){
-    $("conn").className="err"; $("conn").innerHTML='<i class="dot"></i>offline';
+    setConn(false);
     console.error(e);
   }
   setTimeout(tick,4000);
+}
+
+// ── Alerts (server-side, evaluated every 5 min by the database) ───────
+let ALERTS_AT=0, ALERTS_OPEN=false;
+async function loadAlerts(force){
+  if(!force && Date.now()-ALERTS_AT<30000) return;
+  ALERTS_AT=Date.now();
+  const bar=$("alertBar"); if(!bar) return;
+  let rows=[];
+  try{
+    const sf = MY_SITE ? `&site=eq.${encodeURIComponent(String(MY_SITE).toLowerCase())}` : "";
+    rows=await sb("alerts?select=id,site,kind,severity,message,acked_at&resolved_at=is.null&order=created_at.desc&limit=100"+sf);
+  }catch(e){ return; }   // alerts are an extra — never break the page over them
+  if(!rows.length){ bar.style.display="none"; return; }
+  const live=rows.filter(r=>!r.acked_at), crit=live.filter(r=>r.severity==="crit").length;
+  bar.className="alertbar"+(crit?" crit":"")+(ALERTS_OPEN?" open":"");
+  bar.style.display="block";
+  const head = live.length
+    ? `<span style="color:${crit?'var(--red)':'var(--amber)'};font-weight:800">⚠ ${live.length} alert${live.length>1?'s':''}${crit?` · ${crit} critical`:''}</span>`
+    : `<span style="color:var(--muted)">${rows.length} acknowledged alert${rows.length>1?'s':''}</span>`;
+  const list=rows.slice().sort((a,b)=>(!!a.acked_at)-(!!b.acked_at) || (a.severity==="crit"?0:1)-(b.severity==="crit"?0:1));
+  bar.innerHTML=`<div class="ah" onclick="toggleAlerts()">${head}<span style="flex:1"></span><span style="color:var(--muted)">${ALERTS_OPEN?'▲':'▼'}</span></div>
+    <div class="al">${list.map(r=>`<div class="ar${r.acked_at?' acked':''}">
+      <span style="color:${r.severity==='crit'?'var(--red)':'var(--amber)'}">●</span>
+      <b>${esc(r.message)}${IS_ADMIN&&!MY_SITE&&r.site?` <span style="color:var(--muted);font-weight:400">· ${esc(r.site)}</span>`:''}</b>
+      ${r.acked_at?'<span style="color:var(--muted)">acknowledged</span>':`<button onclick="ackAlert(${Number(r.id)})">Acknowledge</button>`}</div>`).join("")}</div>`;
+}
+function toggleAlerts(){ ALERTS_OPEN=!ALERTS_OPEN; const b=$("alertBar"); if(b) b.classList.toggle("open",ALERTS_OPEN); loadAlerts(true); }
+async function ackAlert(id){
+  try{ await supa.rpc('iss_ack_alert',{p_id:id}); }catch(e){}
+  loadAlerts(true);
 }
 
 // ── Auth (Supabase) — ISS login gates the whole dashboard ────
@@ -3110,13 +3196,14 @@ async function startApp(session){
   setSiteBanner();
   if(!STARTED){ STARTED=true; setDays(0); tick(); }
   if(!INTERVALS){ INTERVALS=true; setInterval(()=>{
+    if(document.hidden) return;
     if(curPage==="reports") loadReports();
     if(curPage==="trucks")  loadTrucks();
     if(curPage==="orders")  loadOrders();
   },15000);
   // The weighbridge reading moves while a truck is settling, so it gets its
   // own faster tick — but only while that page is actually on screen.
-  setInterval(()=>{ if(curPage==="trucks") loadWbLive(); }, 4000); }
+  setInterval(()=>{ if(!document.hidden && curPage==="trucks") loadWbLive(); }, 4000); }
 }
 async function doLogin(){
   const u=($("luser").value||"").trim().toLowerCase();
