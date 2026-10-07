@@ -2663,8 +2663,21 @@ const WB_SITE_TITLES = {
   hillside: "Hillside Complex",
   primecoal: "Primecoal",
   commvar:   "Commodities Variation",
-  rietcoal:  "Riet Coal"
+  rietcoal:  "Riet Coal",
+  sus:       "Sustenza Trading"
 };
+// Names typed into the `sites` table fill in every code not listed above, so a
+// new site shows its real name without a code change (sites RLS lets a login
+// read its own row; admin reads all). The hand-written names above still win.
+async function loadSiteTitles(){
+  try{
+    const rows = await sb("sites?select=code,name") || [];
+    rows.forEach(r=>{
+      const c=String(r.code||"").trim().toLowerCase(), n=String(r.name||"").trim();
+      if(c && n && !WB_SITE_TITLES[c]) WB_SITE_TITLES[c]=n;
+    });
+  }catch(e){}
+}
 function siteTitle(code){
   const c=String(code||"").trim();
   if(!c) return "";
@@ -3194,6 +3207,7 @@ async function startApp(session){
   }
   const at=$("tabAdmin"); if(at) at.style.display = IS_ADMIN ? "" : "none";
   setSiteBanner();
+  loadSiteTitles().then(setSiteBanner);
   if(!STARTED){ STARTED=true; setDays(0); tick(); }
   if(!INTERVALS){ INTERVALS=true; setInterval(()=>{
     if(document.hidden) return;
