@@ -2601,6 +2601,22 @@ function barChart(combined){
     <div style="font-size:11px;color:var(--muted);margin-top:4px"><span style="color:#37c98a">■</span> Feed &nbsp; <span style="color:#2183C2">■</span> Product (tons/day)</div>`;
 }
 
+/* Site-defined ticket fields (Rietcoal's Stockpile Nr / Stockpile Grade …)
+   arrive in transactions.extra as {label:value}. Each label in the report
+   becomes its own column, in the order first seen; a report with none of
+   them looks exactly as before. */
+function wbExtraCols(rows){
+  const seen={}, cols=[];
+  (rows||[]).forEach(r=>{ const x=r&&r.extra; if(!x||typeof x!=="object") return;
+    Object.keys(x).forEach(k=>{ const u=String(k).trim().toLowerCase(); if(u&&!seen[u]){ seen[u]=1; cols.push(String(k).trim()); } }); });
+  return cols;
+}
+function wbExtraVal(r,label){
+  const x=r&&r.extra; if(!x||typeof x!=="object") return "";
+  const u=String(label).toLowerCase();
+  for(const k in x) if(String(k).trim().toLowerCase()===u) return x[k]==null?"":String(x[k]);
+  return "";
+}
 async function genWeighbridge(from,to){
   const fISO=from.toISOString(), tISO=to.toISOString();
   // server-side filters that map cleanly to columns
@@ -2622,25 +2638,27 @@ async function genWeighbridge(from,to){
   // Cloud Sync rows) would silently drop out of a server-side inequality.
   const nVoid=rows.filter(r=>String(r&&r.status||"").toLowerCase()==="void").length;
   rows=rows.filter(r=>String(r&&r.status||"").toLowerCase()!=="void");
-  REPORT={type:"wb", rows, voided:nVoid};
+  const xcols=wbExtraCols(rows);
+  REPORT={type:"wb", rows, voided:nVoid, xcols};
   $("rptChart").innerHTML='';
   const body=rows.map(r=>{ const ti=r.time_in?new Date(r.time_in):null;
     return `<tr><td>${ti?dLabel(ti.getTime()):'--'}</td><td>${ti?hLabel(ti):'--'}</td>
       <td>${esc(r.ticket||'--')}</td><td>${esc(r.batch_no||'--')}</td><td style="font-family:monospace">${esc(r.reg||'--')}</td>
       <td>${esc(r.transporter||'--')}</td><td>${esc(r.customer||'--')}</td><td>${esc(r.product||'--')}</td>
+      ${xcols.map(k=>`<td>${esc(wbExtraVal(r,k)||'--')}</td>`).join("")}
       <td class="num">${r.net!=null?fmtT(r.net):'--'}</td></tr>`; }).join("");
   const totNet=rows.reduce((a,r)=>a+nz(r.net),0);
   $("rptBody").innerHTML=`<div class="eyebrow">Transactions (${rows.length}) · ${fmtT(totNet)} t net</div>
-    <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>In</th><th>Ticket</th><th>Batch</th><th>Reg</th><th>Transporter</th><th>Customer</th><th>Product</th><th>Net t</th></tr></thead>
-    <tbody>${body||'<tr><td colspan="9" class="empty">No transactions match</td></tr>'}</tbody></table></div>`;
+    <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>In</th><th>Ticket</th><th>Batch</th><th>Reg</th><th>Transporter</th><th>Customer</th><th>Product</th>${xcols.map(k=>`<th>${esc(k)}</th>`).join("")}<th>Net t</th></tr></thead>
+    <tbody>${body||`<tr><td colspan="${9+xcols.length}" class="empty">No transactions match</td></tr>`}</tbody></table></div>`;
   $("rptStatus").textContent=`${rows.length} transaction(s)`+(nVoid?` · ${nVoid} voided ticket(s) excluded`:``);
 }
 
 function exportReportCSV(){
   if(!REPORT){ alert("Generate a report first."); return; }
   if(REPORT.type==="wb"){
-    const rows=[["Date","Time In","Time Out","Ticket","Batch","Reg","Transporter","Customer","Supplier","Destination","Driver","Product","Net t","Tare kg"]];
-    REPORT.rows.forEach(r=>rows.push([r.time_in?dLabel(new Date(r.time_in).getTime()):"", r.time_in?hLabel(new Date(r.time_in)):"", r.time_out?hLabel(new Date(r.time_out)):"", r.ticket||"", r.batch_no||"", r.reg||"", r.transporter||"", r.customer||"", r.supplier||"", r.destination||"", r.driver||"", r.product||"", r.net==null?"":r.net, r.empty_weight==null?"":r.empty_weight]));
+    const rows=[["Date","Time In","Time Out","Ticket","Batch","Reg","Transporter","Customer","Supplier","Destination","Driver","Product","Net t","Tare kg"].concat(REPORT.xcols||[])];
+    REPORT.rows.forEach(r=>rows.push([r.time_in?dLabel(new Date(r.time_in).getTime()):"", r.time_in?hLabel(new Date(r.time_in)):"", r.time_out?hLabel(new Date(r.time_out)):"", r.ticket||"", r.batch_no||"", r.reg||"", r.transporter||"", r.customer||"", r.supplier||"", r.destination||"", r.driver||"", r.product||"", r.net==null?"":r.net, r.empty_weight==null?"":r.empty_weight].concat((REPORT.xcols||[]).map(k=>wbExtraVal(r,k)))));
     csvDownload("weighbridge_report.csv", rows);
   } else {
     const rows=[["Date","Feed t","Feed t/h","Product t","Discard t","Product %","Discard %","Slurry/spiral %","Hours logged","Outages","Resets","Tonnes not counted"]];
@@ -2826,7 +2844,8 @@ function exportXLSX(){
       return (isFinite(x)&&isFinite(y)) ? y-x : String(b.ticket).localeCompare(String(a.ticket)); });
     const site = (rows.find(r=>r.site)||(REPORT.rows||[])[0]||{}).site || "";
     const L=wbLayout(site);
-    const HEAD=L.cols.map(c=>c[0]);
+    const XC=wbExtraCols(rows);
+    const HEAD=L.cols.map(c=>c[0]).concat(XC);
     const K={}; L.cols.forEach((c,i)=>{ K[c[1]]=i; });   // key -> column index
     const from = $("rFrom").value||"", to = $("rTo").value||"";
     const aoa=[], typed=[];   // typed = real date/time cells patched in after
@@ -2869,7 +2888,7 @@ function exportXLSX(){
         driver: wbTxt(r.driver),
         supplier: wbTxt(r.supplier)
       };
-      aoa.push(L.cols.map(c=>v[c[1]]));
+      aoa.push(L.cols.map(c=>v[c[1]]).concat(XC.map(k=>wbTxt(wbExtraVal(r,k)))));
       // The app dates a ticket by when it completed, so a truck that weighs
       // out after midnight lands on the new day. Falls back to time in when
       // a row has no time out.
@@ -2892,7 +2911,7 @@ function exportXLSX(){
     const ws=XLSX.utils.aoa_to_sheet(aoa);
     typed.forEach(c=>{ ws[XLSX.utils.encode_cell({r:c.r,c:c.c})]={t:"n",v:c.v,z:c.z}; });
     Object.keys(ws).forEach(k=>{ if(k[0]!=="!" && ws[k] && ws[k].t==="s" && ws[k].v==="") delete ws[k]; });
-    ws['!cols']=L.cols.map(c=>({wch:c[2]||12}));
+    ws['!cols']=L.cols.map(c=>({wch:c[2]||12})).concat(XC.map(k=>({wch:Math.max(12,k.length+2)})));
     XLSX.utils.book_append_sheet(wb, ws, safeSheet("REPORT Records-"+from+"_"+to));
     XLSX.writeFile(wb, "REPORT Records-"+from+"_"+to+".xlsx");
 
