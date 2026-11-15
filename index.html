@@ -649,6 +649,45 @@ input[readonly]{border-color:var(--line);color:var(--muted)}
     </div>
     <div id="adminSites" class="site-pick"><div class="empty">Loading…</div></div>
 
+    <div class="eyebrow">Ticket integrity</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:10px">
+      Every ticket a weighbridge uploads is logged. An upload that would have overwritten a finished ticket,
+      or that carries a ticket number another truck already holds, is <b>held here</b> instead of being lost —
+      the original ticket is never touched. Numbers a bridge issued that never arrived are listed as gaps.
+    </div>
+    <div id="integrityBox"><div class="empty">Loading…</div></div>
+    <div class="card" style="margin-bottom:12px">
+      <div class="f-lbl">Ticket trail — every change the cloud has seen for one ticket</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
+        <input id="itSite" list="alSites" placeholder="site code" autocapitalize="off" spellcheck="false" style="flex:1;min-width:110px"/>
+        <input id="itTicket" placeholder="ticket, e.g. WB171" autocapitalize="off" spellcheck="false" style="flex:1;min-width:110px"
+               onkeydown="if(event.key==='Enter')ticketTrail()"/>
+        <button class="fbtn pri" onclick="ticketTrail()">Show trail</button>
+      </div>
+    </div>
+
+    <div class="eyebrow">Alert e-mails</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:10px">
+      Who is e-mailed when an alert is raised. Each alert is mailed once, after it has been open 10 minutes
+      (a held ticket upload is mailed at once). One message per person per run, however many alerts.
+    </div>
+    <div class="card" style="margin-bottom:12px">
+      <div class="f-grid">
+        <div><div class="f-lbl">E-mail address *</div>
+          <input id="arEmail" type="email" placeholder="manager@client.co.za" autocapitalize="off" spellcheck="false"/></div>
+        <div><div class="f-lbl">Site (blank = every site)</div>
+          <input id="arSite" list="alSites" placeholder="all sites" autocapitalize="off" spellcheck="false"/></div>
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-size:12px;cursor:pointer">
+        <input type="checkbox" id="arWarn"/> Send warnings too (missing ticket numbers, long-stay trucks, silent sync) — otherwise critical only
+      </label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+        <button class="fbtn pri" onclick="addRecipient()">Add recipient</button>
+        <button class="fbtn" onclick="testAlertMail()">Send test e-mail to this address</button>
+      </div>
+    </div>
+    <div id="recipList"></div>
+
     <div class="eyebrow">Sites</div>
     <div style="font-size:12px;color:var(--muted);margin-bottom:10px">
       A site code is what ties a weighbridge, its tickets and its logins together.
@@ -1332,7 +1371,15 @@ async function loadOrders(){
   try{
     // Only completed tickets count. An open ticket is a truck on the
     // weighbridge, not tonnage delivered.
-    const rows=await sbAll("transactions?select=order_no,net,action&status=eq.complete&order_no=not.is.null"+sf+"&order=time_out.asc,id.asc");
+    // Summed in the database (migration 07): one small answer instead of
+    // every ticket ever written against an order. Falls back to the old
+    // download if the function is not there.
+    let rows=null;
+    try{
+      const r=await supa.rpc('iss_order_tons',{p_site:site||null});
+      if(r && !r.error && Array.isArray(r.data)) rows=r.data.map(x=>({order_no:x.order_no, net:x.kg, action:x.action}));
+    }catch(e){}
+    if(!rows) rows=await sbAll("transactions?select=order_no,net,action&status=eq.complete&order_no=not.is.null"+sf+"&order=time_out.asc,id.asc");
     rows.forEach(r=>{
       const k=String(r.order_no||"").trim(); if(!k) return;
       const t=Number(r.net)||0;
@@ -1983,8 +2030,169 @@ async function adminUnlink(email){
   catch(e){ alert("Could not unlink:\n\n"+e.message); }
 }
 
+/* ── Ticket integrity (migration 06) ─────────────────────────────────────
+   ticket_conflicts : uploads the database held back rather than lose
+   iss_ticket_gaps  : ticket numbers issued at a bridge that never arrived
+   transactions_history : append-only trail of every change               */
+const INTEG_KIND={number_clash:"Same ticket number, different truck",
+                  overwrite:"Second weigh-out over a finished ticket"};
+function integRow(j){
+  j=j||{};
+  const kg=v=>(v==null||v==="")?"—":Number(v).toLocaleString()+" kg";
+  return `<b style="font-family:monospace">${esc(j.reg||"—")}</b> · net ${esc(kg(j.net))} · in ${esc(hhmm(j.time_in))} · out ${esc(hhmm(j.time_out))}`
+       + `<br><span style="color:var(--muted)">${esc([j.status,j.action,j.product,j.customer,j.operator,j.bridge].filter(Boolean).join(" · ")||"no detail")}</span>`;
+}
+async function loadIntegrity(){
+  const box=$("integrityBox"); if(!box) return;
+  const sf = MY_SITE ? `&site=eq.${encodeURIComponent(String(MY_SITE).toLowerCase())}` : "";
+  let held=[], gaps=[], stale=[];
+  try{
+    held = await sb("ticket_conflicts?select=*&resolved_at=is.null&kind=in.(number_clash,overwrite)&order=id.asc&limit=200"+sf);
+  }catch(e){
+    box.innerHTML='<div class="empty">Ticket integrity is not installed on this database yet — apply migrations/06_ticket_integrity.sql.</div>';
+    return;
+  }
+  try{ const r=await supa.rpc('iss_ticket_gaps',{p_days:14}); gaps=(r&&r.data)||[]; }catch(e){}
+  try{
+    const since=new Date(Date.now()-30*60000).toISOString();
+    stale = await sb("ticket_conflicts?select=site,ticket,incoming_row,seen_count,last_seen_at&kind=eq.stale_open&last_seen_at=gte."+encodeURIComponent(since)+"&order=last_seen_at.desc&limit=50"+sf);
+  }catch(e){}
+  if(MY_SITE) gaps=gaps.filter(g=>String(g.site).toLowerCase()===String(MY_SITE).toLowerCase());
+
+  let h="";
+  if(!held.length && !gaps.length && !stale.length){
+    box.innerHTML='<div class="card" style="margin-bottom:12px;border-color:rgba(73,201,138,.45)"><b style="color:var(--green)">✓ No held uploads and no missing ticket numbers in the last 14 days.</b></div>';
+    return;
+  }
+  if(held.length){
+    h+=`<div class="card" style="margin-bottom:12px;border-color:rgba(242,100,122,.6)">
+      <b style="color:var(--red)">⚠ ${held.length} upload${held.length>1?"s":""} held — a decision is needed</b>
+      <div style="font-size:12px;color:var(--muted);margin:4px 0 8px">Nothing has been lost. The ticket already in the cloud is unchanged; the held upload counts in no report until you decide.</div>
+      ${held.map(c=>`<div style="border-top:1px solid var(--line);padding:10px 0;font-size:12px">
+        <div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap">
+          <b style="font-size:14px">${esc(c.ticket||"(no number)")}</b>
+          <span style="color:var(--muted)">${esc(c.site)} · ${esc(INTEG_KIND[c.kind]||c.kind)} · first seen ${esc(hhmm(c.created_at))} · sent ${Number(c.seen_count)||1}×</span>
+        </div>
+        <div style="margin-top:6px"><span style="color:var(--muted)">IN THE CLOUD</span><br>${integRow(c.existing_row)}</div>
+        <div style="margin-top:6px"><span style="color:var(--amber)">HELD</span><br>${integRow(c.incoming_row)}</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
+          <button class="fbtn sm pri" onclick="resolveConflict(${Number(c.id)},'keep_both',${jq(c.ticket)})">Keep both — issue as ${esc(c.ticket||"")}A</button>
+          ${c.kind==="overwrite"?`<button class="fbtn sm" onclick="resolveConflict(${Number(c.id)},'replace',${jq(c.ticket)})">Replace the cloud ticket</button>`:""}
+          <button class="fbtn sm" onclick="resolveConflict(${Number(c.id)},'discard',${jq(c.ticket)})">Discard the held copy</button>
+        </div></div>`).join("")}
+    </div>`;
+  }
+  if(gaps.length){
+    const by={};
+    gaps.forEach(g=>{ (by[g.site]=by[g.site]||[]).push(g.ticket); });
+    h+=`<div class="card" style="margin-bottom:12px;border-color:rgba(242,169,59,.55)">
+      <b style="color:var(--amber)">${gaps.length} ticket number${gaps.length>1?"s":""} issued at a bridge never reached the cloud (last 14 days)</b>
+      <div style="font-size:12px;color:var(--muted);margin:4px 0 8px">Look each one up in Records on <b>every</b> PC at that site. A real ticket that exists on a PC but not here means that PC is not uploading.</div>
+      ${Object.keys(by).sort().map(k=>`<div style="font-size:12px;padding:4px 0"><b>${esc(k)}</b> — <span style="font-family:monospace">${esc(by[k].join(", "))}</span></div>`).join("")}
+    </div>`;
+  }
+  if(stale.length){
+    h+=`<div class="card" style="margin-bottom:12px">
+      <b>${stale.length} finished truck${stale.length>1?"s are":" is"} still being sent as “on site” by a weighbridge PC</b>
+      <div style="font-size:12px;color:var(--muted);margin:4px 0 8px">The finished tickets are safe — those uploads are ignored. It does mean one PC's on-site list is out of step with the other: an operator could weigh the same truck out twice.</div>
+      ${stale.map(c=>`<div style="font-size:12px;padding:3px 0"><b>${esc(c.site)}</b> · ${esc(c.ticket||"—")} · <span style="font-family:monospace">${esc((c.incoming_row||{}).reg||"—")}</span> · re-sent ${Number(c.seen_count)||1}×</div>`).join("")}
+    </div>`;
+  }
+  box.innerHTML=h;
+}
+async function resolveConflict(id, action, ticket){
+  const say={keep_both:`Keep BOTH tickets?\n\nThe held upload becomes its own ticket, numbered ${ticket||""}A (or the next free letter), and counts in reports from now on.`,
+             replace:`REPLACE ticket ${ticket||""} in the cloud with the held upload?\n\nThe ticket that is there now leaves the reports. It stays in the ticket trail.`,
+             discard:`Discard the held upload for ${ticket||""}?\n\nIt will never count in a report. It stays readable in the database.`}[action];
+  if(!confirm(say)) return;
+  try{
+    const r=await supa.rpc('iss_resolve_conflict',{p_id:id,p_action:action});
+    if(r&&r.error) throw new Error(r.error.message||"failed");
+  }catch(e){ alert("Could not resolve:\n\n"+((e&&e.message)||e)); }
+  loadIntegrity(); loadAlerts(true);
+}
+async function ticketTrail(){
+  const site=String($("itSite").value||MY_SITE||"").trim().toLowerCase(), tk=String($("itTicket").value||"").trim();
+  if(!site||!tk){ alert("Enter the site code and the ticket number."); return; }
+  openDrawer(`<h3>${esc(tk)}</h3><div class="sub">Loading trail…</div>`);
+  let rows;
+  try{
+    // a ticket's number can change (re-numbered on keep-both), so follow the row, not just the number
+    const first=await sb(`transactions_history?select=row_id&site=eq.${encodeURIComponent(site)}&ticket=eq.${encodeURIComponent(tk)}&limit=50`);
+    const ids=[...new Set(first.map(r=>r.row_id).filter(Boolean))];
+    rows = ids.length
+      ? await sbAll(`transactions_history?select=*&row_id=in.(${ids.map(encodeURIComponent).join(",")})&order=at.asc,id.asc`)
+      : [];
+  }catch(e){
+    $("drawerContent").innerHTML=`<h3>${esc(tk)}</h3><div class="empty">Could not load the trail (${esc((e&&e.message)||e)}).</div>`; return;
+  }
+  const SHOW=["ticket","status","reg","net","empty_weight","full_weight","time_in","time_out","customer","product","order_no","operator","bridge"];
+  const body=rows.map(r=>{
+    const o=r.old_row||{}, n=r.new_row||{};
+    const diff = r.op==="UPDATE"
+      ? SHOW.filter(k=>String(o[k]??"")!==String(n[k]??"")).map(k=>`${esc(k)}: <span style="color:var(--muted)">${esc(o[k]??"—")}</span> → <b>${esc(n[k]??"—")}</b>`).join("<br>")
+      : SHOW.map(k=>(r.op==="DELETE"?o:n)[k]).some(v=>v!=null) ? integRow(r.op==="DELETE"?o:n) : "";
+    return `<tr><td style="white-space:nowrap">${esc(hhmm(r.at))}</td>
+      <td><b style="color:${r.op==="DELETE"?"var(--red)":r.op==="INSERT"?"var(--green)":"var(--ink)"}">${esc(r.op)}</b><br><span style="color:var(--muted)">${esc(r.actor||"")}</span></td>
+      <td>${diff||'<span style="color:var(--muted)">no visible field changed</span>'}</td></tr>`;
+  }).join("");
+  $("drawerContent").innerHTML=`<h3>${esc(tk)} <span style="color:var(--muted);font-weight:400">· ${esc(site)}</span></h3>
+    <div class="sub">${rows.length} recorded change${rows.length===1?"":"s"}. The trail starts when ticket integrity was installed; earlier changes were not recorded.</div>
+    <div class="tbl-wrap"><table><thead><tr><th>When</th><th>What</th><th>Detail</th></tr></thead>
+    <tbody>${body||'<tr><td colspan="3" class="empty">Nothing recorded for that ticket at that site</td></tr>'}</tbody></table></div>`;
+}
+
+/* ── Alert e-mail recipients (migration 08 + alert-notify function) ── */
+async function loadRecipients(){
+  const el=$("recipList"); if(!el) return;
+  let rows;
+  try{ rows=await sb("alert_recipients?select=*&order=email.asc,site.asc"); }
+  catch(e){ el.innerHTML='<div class="empty">Alert e-mails are not installed on this database yet — apply migrations/08_alert_delivery.sql.</div>'; return; }
+  if(!rows.length){ el.innerHTML='<div class="empty" style="margin-bottom:12px">Nobody is being e-mailed yet. Alerts show in the dashboard only.</div>'; return; }
+  el.innerHTML=`<div class="tbl-wrap" style="margin-bottom:12px"><table class="f-tbl"><thead><tr><th>E-mail</th><th>Site</th><th>Gets</th><th></th></tr></thead><tbody>
+    ${rows.map(r=>`<tr style="${r.active?"":"opacity:.5"}"><td>${esc(r.email)}</td><td>${esc(r.site||"all sites")}</td>
+      <td>${r.min_severity==="warn"?"critical + warnings":"critical only"}${r.active?"":" · paused"}</td>
+      <td style="text-align:right;white-space:nowrap">
+        <button class="fbtn sm" onclick="toggleRecipient(${Number(r.id)},${r.active?"false":"true"})">${r.active?"Pause":"Resume"}</button>
+        <button class="fbtn sm" onclick="removeRecipient(${Number(r.id)},${jq(r.email)})">Remove</button></td></tr>`).join("")}
+    </tbody></table></div>`;
+}
+async function addRecipient(){
+  const email=String($("arEmail").value||"").trim().toLowerCase(), site=String($("arSite").value||"").trim().toLowerCase();
+  if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ alert("Enter a valid e-mail address."); return; }
+  try{
+    await sbPost("alert_recipients",{email, site:site||null, min_severity:$("arWarn").checked?"warn":"crit"});
+    $("arEmail").value=""; $("arSite").value=""; $("arWarn").checked=false;
+  }catch(e){ alert(/23505|duplicate/i.test(String(e.message))?"That address is already listed for that site.":"Could not add:\n\n"+e.message); }
+  loadRecipients();
+}
+async function toggleRecipient(id,on){
+  try{ await sbPatch("alert_recipients?id=eq."+Number(id),{active:!!on}); }catch(e){ alert("Could not update: "+e.message); }
+  loadRecipients();
+}
+async function removeRecipient(id,email){
+  if(!confirm("Stop e-mailing "+email+"?")) return;
+  try{
+    const r=await fetch(SB_URL+"/rest/v1/alert_recipients?id=eq."+Number(id),{method:"DELETE",headers:authHeaders()});
+    if(!r.ok) throw new Error(r.status);
+  }catch(e){ alert("Could not remove: "+e.message); }
+  loadRecipients();
+}
+async function testAlertMail(){
+  const to=String($("arEmail").value||"").trim().toLowerCase();
+  if(!to){ alert("Type the address to test in the e-mail box first."); return; }
+  try{
+    const r=await fetch(SB_URL+"/functions/v1/alert-notify",{method:"POST",
+      headers:{...authHeaders(),"Content-Type":"application/json"},body:JSON.stringify({test:true,to})});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok||j.error) throw new Error(j.error||("HTTP "+r.status));
+    alert("Test e-mail sent to "+to+". Check the inbox (and the spam folder).");
+  }catch(e){ alert("Test e-mail failed:\n\n"+((e&&e.message)||e)); }
+}
+
 async function loadAdmin(){
   renderAdminSites();
+  if(IS_ADMIN){ loadIntegrity(); loadRecipients(); }
   if(IS_ADMIN) loadSites();
   if(!IS_ADMIN){ $("adminList").innerHTML='<div class="empty">Admin only.</div>'; return; }
   let rows;
