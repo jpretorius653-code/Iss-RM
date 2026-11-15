@@ -11,10 +11,12 @@ time, in order, and check the dashboard after each.
 | 04_alerts.sql | Server-side alerts every 5 min (silent scale/gateway, totalizer reset, stale open truck, silent site) | Low (additive). APPLIED. |
 | 05_transactions_extra.sql | Site-defined ticket fields (Rietcoal Stockpile Nr / Grade) never reached the cloud or reports | Low (additive, nullable). APPLIED 2026-10-13. |
 | 06_ticket_integrity.sql | Tickets lost at MMS (two PCs, one ticket number): rejected uploads dropped by the app, finished tickets overwritten or flipped back to open. Adds `transactions_history`, `ticket_conflicts`, guard trigger, gap/conflict alerts, no hard delete. See `docs/TICKET-LOSS-ANALYSIS.md` | Medium — a trigger on every ticket upload. Fails open; tested on a local copy of the schema. **APPLIED 2026-11-15.** Rollback block at the end of the file. |
+| 07_housekeeping_access.sql | Identical re-uploads no longer rewrite rows (Hillside re-sends ~4 000 tickets every 30 s); duplicate indexes and read policy dropped; backup tables moved to schema `archive`; public-key ticket inserts limited to `hillside`; legacy `scale_data` closed; alerts evaluated once per run; `iss_order_tons()` | Low–medium. **APPLIED 2026-11-15** (with 06b: DELETE re-granted to anon — see note in 06). |
+| 08_alert_delivery.sql + `supabase/functions/alert-notify` | Alerts by e-mail: `alert_recipients`, `alerts.notified_at`, 5-minute job calling the Edge Function | Low (additive). **APPLIED 2026-11-15.** Sends nothing until the `RESEND_API_KEY` secret is set — see `docs/ALERT-EMAIL-SETUP.md`. |
 
 ## Deliberately NOT drafted yet
 
-* **Closing anon INSERT on `transactions`/`readings` (audit #5).** Hillside's
+* **Closing anon INSERT on `readings`, and on `transactions` for Hillside (audit #5).** 07 limits public-key ticket inserts to `hillside`; the rest is still open. Hillside's
   Cloud Sync (`iss-cloud-sync`, `electron/uploader.js`) still posts with the
   public key. Dropping the policy today would stop Hillside uploading. It needs
   an ingest endpoint with a per-site secret and a Cloud Sync update first.

@@ -410,7 +410,10 @@ create trigger iss_tx_no_delete_trg before delete on public.transactions
   for each row execute function public.iss_tx_no_delete();
 
 -- the public key never needed these; RLS does not cover TRUNCATE at all
-revoke truncate, delete on public.transactions from anon;
+-- DELETE stays granted to anon: iss_tx_clear_open runs with the caller's rights
+-- and issues a DELETE on every complete ticket; without the table privilege the
+-- insert itself fails. anon has no DELETE policy, so it can delete nothing.
+revoke truncate on public.transactions from anon;
 revoke truncate on public.transactions from authenticated;
 
 -- ───────────────────────── ROLLBACK ─────────────────────────

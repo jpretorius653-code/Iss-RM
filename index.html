@@ -666,6 +666,28 @@ input[readonly]{border-color:var(--line);color:var(--muted)}
       </div>
     </div>
 
+    <div class="eyebrow">Alert e-mails</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:10px">
+      Who is e-mailed when an alert is raised. Each alert is mailed once, after it has been open 10 minutes
+      (a held ticket upload is mailed at once). One message per person per run, however many alerts.
+    </div>
+    <div class="card" style="margin-bottom:12px">
+      <div class="f-grid">
+        <div><div class="f-lbl">E-mail address *</div>
+          <input id="arEmail" type="email" placeholder="manager@client.co.za" autocapitalize="off" spellcheck="false"/></div>
+        <div><div class="f-lbl">Site (blank = every site)</div>
+          <input id="arSite" list="alSites" placeholder="all sites" autocapitalize="off" spellcheck="false"/></div>
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-size:12px;cursor:pointer">
+        <input type="checkbox" id="arWarn"/> Send warnings too (missing ticket numbers, long-stay trucks, silent sync) — otherwise critical only
+      </label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+        <button class="fbtn pri" onclick="addRecipient()">Add recipient</button>
+        <button class="fbtn" onclick="testAlertMail()">Send test e-mail to this address</button>
+      </div>
+    </div>
+    <div id="recipList"></div>
+
     <div class="eyebrow">Sites</div>
     <div style="font-size:12px;color:var(--muted);margin-bottom:10px">
       A site code is what ties a weighbridge, its tickets and its logins together.
@@ -1349,7 +1371,15 @@ async function loadOrders(){
   try{
     // Only completed tickets count. An open ticket is a truck on the
     // weighbridge, not tonnage delivered.
-    const rows=await sbAll("transactions?select=order_no,net,action&status=eq.complete&order_no=not.is.null"+sf+"&order=time_out.asc,id.asc");
+    // Summed in the database (migration 07): one small answer instead of
+    // every ticket ever written against an order. Falls back to the old
+    // download if the function is not there.
+    let rows=null;
+    try{
+      const r=await supa.rpc('iss_order_tons',{p_site:site||null});
+      if(r && !r.error && Array.isArray(r.data)) rows=r.data.map(x=>({order_no:x.order_no, net:x.kg, action:x.action}));
+    }catch(e){}
+    if(!rows) rows=await sbAll("transactions?select=order_no,net,action&status=eq.complete&order_no=not.is.null"+sf+"&order=time_out.asc,id.asc");
     rows.forEach(r=>{
       const k=String(r.order_no||"").trim(); if(!k) return;
       const t=Number(r.net)||0;
@@ -2112,9 +2142,57 @@ async function ticketTrail(){
     <tbody>${body||'<tr><td colspan="3" class="empty">Nothing recorded for that ticket at that site</td></tr>'}</tbody></table></div>`;
 }
 
+/* ── Alert e-mail recipients (migration 08 + alert-notify function) ── */
+async function loadRecipients(){
+  const el=$("recipList"); if(!el) return;
+  let rows;
+  try{ rows=await sb("alert_recipients?select=*&order=email.asc,site.asc"); }
+  catch(e){ el.innerHTML='<div class="empty">Alert e-mails are not installed on this database yet — apply migrations/08_alert_delivery.sql.</div>'; return; }
+  if(!rows.length){ el.innerHTML='<div class="empty" style="margin-bottom:12px">Nobody is being e-mailed yet. Alerts show in the dashboard only.</div>'; return; }
+  el.innerHTML=`<div class="tbl-wrap" style="margin-bottom:12px"><table class="f-tbl"><thead><tr><th>E-mail</th><th>Site</th><th>Gets</th><th></th></tr></thead><tbody>
+    ${rows.map(r=>`<tr style="${r.active?"":"opacity:.5"}"><td>${esc(r.email)}</td><td>${esc(r.site||"all sites")}</td>
+      <td>${r.min_severity==="warn"?"critical + warnings":"critical only"}${r.active?"":" · paused"}</td>
+      <td style="text-align:right;white-space:nowrap">
+        <button class="fbtn sm" onclick="toggleRecipient(${Number(r.id)},${r.active?"false":"true"})">${r.active?"Pause":"Resume"}</button>
+        <button class="fbtn sm" onclick="removeRecipient(${Number(r.id)},${jq(r.email)})">Remove</button></td></tr>`).join("")}
+    </tbody></table></div>`;
+}
+async function addRecipient(){
+  const email=String($("arEmail").value||"").trim().toLowerCase(), site=String($("arSite").value||"").trim().toLowerCase();
+  if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ alert("Enter a valid e-mail address."); return; }
+  try{
+    await sbPost("alert_recipients",{email, site:site||null, min_severity:$("arWarn").checked?"warn":"crit"});
+    $("arEmail").value=""; $("arSite").value=""; $("arWarn").checked=false;
+  }catch(e){ alert(/23505|duplicate/i.test(String(e.message))?"That address is already listed for that site.":"Could not add:\n\n"+e.message); }
+  loadRecipients();
+}
+async function toggleRecipient(id,on){
+  try{ await sbPatch("alert_recipients?id=eq."+Number(id),{active:!!on}); }catch(e){ alert("Could not update: "+e.message); }
+  loadRecipients();
+}
+async function removeRecipient(id,email){
+  if(!confirm("Stop e-mailing "+email+"?")) return;
+  try{
+    const r=await fetch(SB_URL+"/rest/v1/alert_recipients?id=eq."+Number(id),{method:"DELETE",headers:authHeaders()});
+    if(!r.ok) throw new Error(r.status);
+  }catch(e){ alert("Could not remove: "+e.message); }
+  loadRecipients();
+}
+async function testAlertMail(){
+  const to=String($("arEmail").value||"").trim().toLowerCase();
+  if(!to){ alert("Type the address to test in the e-mail box first."); return; }
+  try{
+    const r=await fetch(SB_URL+"/functions/v1/alert-notify",{method:"POST",
+      headers:{...authHeaders(),"Content-Type":"application/json"},body:JSON.stringify({test:true,to})});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok||j.error) throw new Error(j.error||("HTTP "+r.status));
+    alert("Test e-mail sent to "+to+". Check the inbox (and the spam folder).");
+  }catch(e){ alert("Test e-mail failed:\n\n"+((e&&e.message)||e)); }
+}
+
 async function loadAdmin(){
   renderAdminSites();
-  if(IS_ADMIN) loadIntegrity();
+  if(IS_ADMIN){ loadIntegrity(); loadRecipients(); }
   if(IS_ADMIN) loadSites();
   if(!IS_ADMIN){ $("adminList").innerHTML='<div class="empty">Admin only.</div>'; return; }
   let rows;
