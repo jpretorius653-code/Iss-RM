@@ -10,7 +10,7 @@ time, in order, and check the dashboard after each.
 | 03_remote_firmware.sql | Remote firmware + config tables for the ESP32 boxes | Low (additive). DRAFT — apply after the signing key exists. |
 | 04_alerts.sql | Server-side alerts every 5 min (silent scale/gateway, totalizer reset, stale open truck, silent site) | Low (additive). APPLIED. |
 | 05_transactions_extra.sql | Site-defined ticket fields (Rietcoal Stockpile Nr / Grade) never reached the cloud or reports | Low (additive, nullable). APPLIED 2026-10-13. |
-| 06_ticket_integrity.sql | Tickets lost at MMS (two PCs, one ticket number): rejected uploads dropped by the app, finished tickets overwritten or flipped back to open. Adds `transactions_history`, `ticket_conflicts`, guard trigger, gap/conflict alerts, no hard delete. See `docs/TICKET-LOSS-ANALYSIS.md` | Medium — a trigger on every ticket upload. Fails open; tested on a local copy of the schema. **NOT APPLIED.** Rollback block at the end of the file. |
+| 06_ticket_integrity.sql | Tickets lost at MMS (two PCs, one ticket number): rejected uploads dropped by the app, finished tickets overwritten or flipped back to open. Adds `transactions_history`, `ticket_conflicts`, guard trigger, gap/conflict alerts, no hard delete. See `docs/TICKET-LOSS-ANALYSIS.md` | Medium — a trigger on every ticket upload. Fails open; tested on a local copy of the schema. **APPLIED 2026-11-15.** Rollback block at the end of the file. |
 
 ## Deliberately NOT drafted yet
 

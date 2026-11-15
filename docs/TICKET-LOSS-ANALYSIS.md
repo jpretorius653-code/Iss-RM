@@ -68,7 +68,8 @@ The existing `sync_silent` alert fired but is only visible inside the dashboard.
 ## 3. What has been built (this repository)
 
 `migrations/06_ticket_integrity.sql` — tested against a local copy of the live schema with
-the MMS and Hillside cases replayed. **Not yet applied to the live database.**
+the MMS and Hillside cases replayed. **Applied to the live database on 15 November 2026.**
+It protects every app version already installed; nothing has to be reinstalled on site.
 
 | Loss path | After migration 06 |
 |---|---|
@@ -106,7 +107,7 @@ With the app as it is today:
 4. Never set up, reinstall or restore a second PC while the first is weighing. After any
    reinstall, set the next ticket number by hand to above the highest number issued, before
    the first truck.
-5. Apply migration 06 before go-live and have someone watch the alert bar daily. A held upload
+5. Have someone watch the dashboard alert bar daily (migration 06 is live). A held upload
    or a gap is dealt with the same day, while the paper ticket is still findable.
 6. Keep the printed ticket book until month-end figures are reconciled against the cloud.
 
